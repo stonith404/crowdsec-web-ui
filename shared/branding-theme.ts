@@ -15,7 +15,7 @@ export type ThemeScale = Record<ThemeShade, string>;
 
 export const NEUTRAL_TONES = ['gray', 'slate', 'zinc', 'neutral', 'stone'] as const;
 export type NeutralTone = typeof NEUTRAL_TONES[number];
-export const DEFAULT_NEUTRAL_TONE: NeutralTone = 'gray';
+export const DEFAULT_NEUTRAL_TONE: NeutralTone = 'neutral';
 
 export const THEME_MODES = ['light', 'dark'] as const;
 export type ThemeModeName = typeof THEME_MODES[number];
@@ -39,17 +39,17 @@ export const DEFAULT_BRANDING_THEME: BrandingTheme = {
 
 /** The built-in accent palette; keep in sync with `@theme` in client/src/index.css. */
 export const DEFAULT_ACCENT_SCALE: ThemeScale = {
-  50: '#f0f9ff',
-  100: '#e0f2fe',
-  200: '#bae6fd',
-  300: '#7dd3fc',
-  400: '#38bdf8',
-  500: '#0ea5e9',
-  600: '#0284c7',
-  700: '#0369a1',
-  800: '#075985',
-  900: '#0c4a6e',
-  950: '#082f49',
+  50: '#f3f8ff',
+  100: '#e6f0ff',
+  200: '#cce0ff',
+  300: '#a6c8ff',
+  400: '#7badff',
+  500: '#5997ff',
+  600: '#056dff',
+  700: '#0859d1',
+  800: '#114dab',
+  900: '#12408c',
+  950: '#0b295b',
 };
 
 /** Accent shade 600 of the built-in palette; used as the color picker's starting value. */
@@ -116,7 +116,7 @@ export function parseBrandingThemeInput(value: unknown): BrandingTheme {
     const { accent, neutral } = mode as Partial<Record<keyof ThemeModeColors, unknown>>;
     const normalizedAccent = accent === null || accent === undefined || accent === '' ? null : normalizeHexColor(accent);
     if (normalizedAccent === null && accent !== null && accent !== undefined && accent !== '') {
-      throw new BrandingThemeValidationError(`Theme ${modeName} accent must be a hex color such as #0284c7`);
+      throw new BrandingThemeValidationError(`Theme ${modeName} accent must be a hex color such as #056dff`);
     }
     if (neutral !== null && neutral !== undefined && neutral !== '' && !isNeutralTone(neutral)) {
       throw new BrandingThemeValidationError(`Theme ${modeName} neutral tone must be one of: ${NEUTRAL_TONES.join(', ')}`);
