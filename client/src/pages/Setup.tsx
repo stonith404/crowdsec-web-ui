@@ -1,107 +1,68 @@
 import { useState, type FormEvent } from 'react';
-import { ShieldPlus } from 'lucide-react';
 import { Navigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { AppLogo } from '../components/AppLogo';
-import { useBranding } from '../contexts/useBranding';
+import { ShieldPlusIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { Banner, Button, Input } from '@cloudflare/kumo';
+import { AuthLayout } from '@/components/auth-layout';
+import { useAuth } from '@/contexts/AuthContext';
+import { useBranding } from '@/contexts/useBranding';
+import { useI18n } from '@/lib/i18n';
 
-function validatePassword(password: string): string | null {
-  if (password.length < 8) return 'Password must be at least 8 characters';
-  if (!/[a-z]/.test(password)) return 'Password must contain a lowercase letter';
-  if (!/[A-Z]/.test(password)) return 'Password must contain an uppercase letter';
-  if (!/\d/.test(password)) return 'Password must contain a digit';
+function passwordErrorKey(password: string): string | null {
+  if (password.length < 8) return 'pages.setup.error.passwordLength';
+  if (!/[a-z]/.test(password)) return 'pages.setup.error.passwordLowercase';
+  if (!/[A-Z]/.test(password)) return 'pages.setup.error.passwordUppercase';
+  if (!/\d/.test(password)) return 'pages.setup.error.passwordDigit';
   return null;
 }
 
 export function Setup() {
   const { authEnabled, setupRequired, setup } = useAuth();
   const { appName } = useBranding();
+  const { t } = useI18n();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  if (!authEnabled || !setupRequired) {
-    return <Navigate to="/" replace />;
-  }
+  if (!authEnabled || !setupRequired) return <Navigate to="/" replace />;
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
-    const passwordError = validatePassword(password);
-    if (passwordError) {
-      setError(passwordError);
+    const errorKey = passwordErrorKey(password);
+    if (errorKey) {
+      setError(t(errorKey));
       return;
     }
-
-    setIsLoading(true);
+    setLoading(true);
     try {
       await setup(username, password);
     } catch (setupError) {
-      setError(setupError instanceof Error ? setupError.message : 'Setup failed');
+      setError(setupError instanceof Error ? setupError.message : t('pages.setup.error.failed'));
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-950 p-4 text-gray-100">
-      <div className="w-full max-w-sm rounded-xl border border-gray-800 bg-gray-900 p-8 shadow-2xl">
-        <div className="mb-6 text-center">
-          <AppLogo className="mx-auto h-14 w-14" />
-          <p className="mt-4 break-words text-sm font-medium text-gray-400">{appName}</p>
-          <h1 className="mt-1 text-2xl font-bold">Initial setup</h1>
-          <p className="mt-1 text-sm text-gray-400">Create your administrator account</p>
-        </div>
-
-        {error && (
-          <div className="mb-4 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-200">
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={(event) => void handleSubmit(event)} className="space-y-4">
-          <div className="space-y-1.5">
-            <label htmlFor="setup-username" className="block text-xs font-semibold uppercase tracking-wide text-gray-400">
-              Username
-            </label>
-            <input
-              id="setup-username"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              required
-              autoComplete="username"
-              className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/40"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="setup-password" className="block text-xs font-semibold uppercase tracking-wide text-gray-400">
-              Password
-            </label>
-            <input
-              id="setup-password"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-              autoComplete="new-password"
-              minLength={8}
-              className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/40"
-            />
-            <p className="text-xs text-gray-500">Minimum 8 characters with uppercase, lowercase, and a digit.</p>
-          </div>
-
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-semibold text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <ShieldPlus className="h-4 w-4" />
-            Create Account
-          </button>
-        </form>
-      </div>
-    </div>
+    <AuthLayout title={t('pages.setup.title', { appName })} description={t('pages.setup.description')}>
+      {error ? <Banner variant="error" size="sm" icon={<WarningCircleIcon weight="fill" />} description={error} /> : null}
+      <form onSubmit={(event) => void handleSubmit(event)} className="flex flex-col gap-4">
+        <Input label={t('pages.login.username')} value={username} onChange={(event) => setUsername(event.target.value)} required autoComplete="username" autoFocus />
+        <Input
+          label={t('pages.login.password')}
+          type="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+          autoComplete="new-password"
+          minLength={8}
+          description={t('pages.setup.passwordHint')}
+        />
+        <Button type="submit" variant="primary" className="w-full" loading={loading} icon={<ShieldPlusIcon />}>
+          {t('pages.setup.submit')}
+        </Button>
+      </form>
+    </AuthLayout>
   );
 }

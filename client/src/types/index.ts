@@ -1,5 +1,5 @@
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
-import type { SyncStatus } from '../../../shared/contracts';
+import type { ConfigResponse, SyncStatus } from '../../../shared/contracts';
 
 export type {
   AddDecisionRequest,
@@ -25,6 +25,7 @@ export type {
   DashboardStatsSeries,
   DashboardStatsTotals,
   DashboardWorldMapDatum,
+  CrowdsecMetricsActiveDecisions,
   CrowdsecMetricsApiEntity,
   CrowdsecMetricsAppsecEngine,
   CrowdsecMetricsLapiRoute,
@@ -134,6 +135,8 @@ export interface RefreshContextValue {
   refreshSignal: number;
   syncStatus: SyncStatus | null;
   refreshNow?: (mode: ManualRefreshMode) => Promise<void>;
+  config: ConfigResponse | null;
+  reloadConfig: () => Promise<void>;
 }
 
 export interface NotificationUnreadContextValue {

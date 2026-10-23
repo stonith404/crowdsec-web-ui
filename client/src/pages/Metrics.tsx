@@ -1,1339 +1,512 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import {
-  Activity,
-  AlertCircle,
-  Blend,
-  Bot,
-  CheckCircle2,
-  Clock3,
-  DatabaseZap,
-  FileSearch,
-  ListChecks,
-  Network,
-  RefreshCw,
-  Server,
-  ShieldCheck,
-  ShieldOff,
-} from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
+import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { IntersectIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { Badge, Banner, Button, Empty, LayerCard, Loader, Select, Switch, cn, type BadgeVariant } from '@cloudflare/kumo';
+import { EMPTY_CELL, ScenarioName, TextCell } from '@/components/cells';
+import { InstanceIcon } from '@/components/instance-icon';
+import { HeaderHint, MetricsSection, SplitBar } from '@/components/metrics/metrics-section';
+import { PageHeader } from '@/components/page-header';
+import { useRefresh } from '@/contexts/useRefresh';
+import { useServerData } from '@/hooks/use-server-data';
+import { fetchCombinedCrowdsecMetrics, fetchCrowdsecMetrics } from '@/lib/api';
+import { useDateTime } from '@/lib/dateTime';
+import { toErrorInfo } from '@/lib/errors';
+import { useI18n } from '@/lib/i18n';
+import type { CrowdsecMetricsBouncerMode, CrowdsecMetricsResponse, CrowdsecMetricsRouteActivity } from '@/types';
 
-import { fetchCombinedCrowdsecMetrics, fetchConfig, fetchCrowdsecMetrics } from '../lib/api';
-import { useRefresh } from '../contexts/useRefresh';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
-import { Badge } from '../components/ui/Badge';
-import { Switch } from '../components/ui/Switch';
-import { DropdownSelect } from '../components/ui/DropdownSelect';
-import { InstanceIcon } from '../components/InstanceIcon';
-import { useI18n } from '../lib/i18n';
-import { useDateTime } from '../lib/dateTime';
-import type {
-  CrowdsecMetricsApiEntity,
-  CrowdsecMetricsAppsecEngine,
-  CrowdsecMetricsBouncerMode,
-  CrowdsecMetricsLapiRoute,
-  CrowdsecMetricsParserNode,
-  CrowdsecMetricsParserSource,
-  CrowdsecMetricsResponse,
-  CrowdsecMetricsRouteActivity,
-  CrowdsecMetricsScenario,
-  CrowdsecMetricsSource,
-  CrowdsecMetricsTiming,
-  CrowdsecMetricsWhitelist,
-  InstanceSummary,
-} from '../types';
-
-type MetricsState =
-  | { status: 'loading' }
-  | { status: 'disabled' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; data: CrowdsecMetricsResponse };
-
+const COMBINED_ENDPOINT_ID = '_combined';
 const SHOW_CHILD_PARSER_NODES_STORAGE_KEY = 'crowdsec-web-ui:metrics:show-child-parser-nodes';
 const MACHINE_ONLINE_WINDOW_MS = 2 * 60 * 1_000;
-const COMBINED_ENDPOINT_ID = '_combined';
 
-const MetricsSourcesContext = createContext<{
-  sources: Map<string, CrowdsecMetricsSource>;
-  includeInstance: boolean;
-}>({ sources: new Map(), includeInstance: false });
-
-function MetricsSourceBadge({ sourceId }: { sourceId?: string }) {
-  const { sources, includeInstance } = useContext(MetricsSourcesContext);
-  if (!sourceId) return null;
-  const source = sources.get(sourceId);
-  if (!source) return null;
-  const label = includeInstance
-    ? `${source.instance_name} — ${source.endpoint_name}`
-    : source.endpoint_name;
-  return (
-    <Badge variant="outline" title={label}>
-      {source.endpoint_icon && (
-        <span className="mr-1 inline-flex h-3.5 min-w-3.5 items-center justify-center leading-none" aria-hidden="true">
-          {source.endpoint_icon}
-        </span>
-      )}
-      {label}
-    </Badge>
-  );
-}
+const BOUNCER_MODE_VARIANTS: Record<CrowdsecMetricsBouncerMode, BadgeVariant> = {
+  live: 'success',
+  stream: 'info',
+  mixed: 'warning',
+  unknown: 'secondary',
+};
 
 function formatNumber(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
-function formatPercent(value: number | null, notAvailable = 'n/a'): string {
-  if (value === null) return notAvailable;
+function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function formatDuration(value: number | null, notAvailable = 'n/a'): string {
-  if (value === null) return notAvailable;
+function formatDuration(value: number): string {
   if (value < 0.001) return `${(value * 1_000_000).toFixed(1)} us`;
   if (value < 1) return `${(value * 1_000).toFixed(1)} ms`;
   return `${value.toFixed(2)} s`;
 }
 
-function formatMetricDateTime(value: string, formatDateTime: (value: string) => string): string {
-  return Number.isNaN(new Date(value).getTime()) ? 'n/a' : formatDateTime(value);
+function Muted({ children = EMPTY_CELL }: { children?: string }) {
+  return <span className="text-kumo-subtle">{children}</span>;
 }
 
-function formatOptionalNumber(value: number | null): string {
-  return value === null ? '-' : formatNumber(value);
-}
-
-type MachineHeartbeatStatus = 'online' | 'stale' | 'observed' | 'missing';
-
-function machineHeartbeatStatus(
-  lastHeartbeatAt: string | null | undefined,
-  heartbeatRequests: number,
-  fetchedAt: string,
-): MachineHeartbeatStatus {
-  if (!lastHeartbeatAt) return heartbeatRequests > 0 ? 'observed' : 'missing';
-
-  const heartbeatTime = new Date(lastHeartbeatAt).getTime();
-  const fetchedTime = new Date(fetchedAt).getTime();
-  if (Number.isNaN(heartbeatTime) || Number.isNaN(fetchedTime)) {
-    return heartbeatRequests > 0 ? 'observed' : 'missing';
-  }
-
-  return fetchedTime - heartbeatTime <= MACHINE_ONLINE_WINDOW_MS ? 'online' : 'stale';
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
-}
-
-function readStoredShowChildParserNodes(): boolean {
-  if (typeof window === 'undefined') {
-    return false;
-  }
-
-  try {
-    return window.localStorage.getItem(SHOW_CHILD_PARSER_NODES_STORAGE_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-function saveShowChildParserNodes(showChildParserNodes: boolean): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(SHOW_CHILD_PARSER_NODES_STORAGE_KEY, String(showChildParserNodes));
-  } catch {
-    // This is a convenience preference; metrics continue to render without storage.
-  }
-}
-
-type MetricTone = 'neutral' | 'success' | 'warning' | 'danger';
-
-const toneClasses: Record<MetricTone, {
-  text: string;
-  bg: string;
-  bar: string;
-}> = {
-  neutral: {
-    text: 'text-primary-600 dark:text-primary-400',
-    bg: 'bg-primary-50 dark:bg-primary-900/30',
-    bar: 'bg-primary-500',
-  },
-  success: {
-    text: 'text-emerald-700 dark:text-emerald-300',
-    bg: 'bg-emerald-50 dark:bg-emerald-950/40',
-    bar: 'bg-emerald-500',
-  },
-  warning: {
-    text: 'text-amber-700 dark:text-amber-300',
-    bg: 'bg-amber-50 dark:bg-amber-950/40',
-    bar: 'bg-amber-500',
-  },
-  danger: {
-    text: 'text-amber-800 dark:text-amber-300',
-    bg: 'bg-amber-50 dark:bg-amber-950/40',
-    bar: 'bg-amber-500',
-  },
-};
-
-function successTone(value: number | null): MetricTone {
-  if (value === null) return 'neutral';
-  if (value >= 0.8) return 'success';
-  if (value >= 0.5) return 'warning';
-  return 'danger';
-}
-
-function latencyTone(value: number | null): MetricTone {
-  if (value === null) return 'neutral';
-  if (value > 1) return 'danger';
-  if (value > 0.25) return 'warning';
-  return 'success';
-}
-
-function parserTimingTone(value: number | null): MetricTone {
-  if (value === null) return 'neutral';
-  if (value > 0.01) return 'danger';
-  if (value >= 0.001) return 'warning';
-  return 'success';
-}
-
-function ProgressBar({ value, tone = 'neutral' }: { value: number | null; tone?: MetricTone }) {
-  const percent = value === null ? 0 : Math.max(0, Math.min(100, value * 100));
-
+function NameCell({ name, detail }: { name: string; detail: string }) {
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
-      <div
-        className={`h-full rounded-full transition-[width] ${toneClasses[tone].bar}`}
-        style={{ width: `${percent}%` }}
-      />
+    <div className="flex min-w-0 flex-col leading-tight">
+      <span className="truncate font-medium" title={name}>{name}</span>
+      <span className="truncate text-xs text-kumo-subtle" title={detail}>{detail}</span>
     </div>
   );
 }
 
-function DecisionResponseBar({ empty, nonEmpty }: { empty: number; nonEmpty: number }) {
-  const total = empty + nonEmpty;
-  const emptyPercent = total > 0 ? Math.max(0, Math.min(100, (empty / total) * 100)) : 0;
-
+function SuccessRate({ value }: { value: number | null }) {
+  if (value === null) return <Muted />;
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-amber-500">
-      <div
-        className="h-full rounded-full bg-emerald-500 transition-[width]"
-        style={{ width: `${emptyPercent}%` }}
-      />
-    </div>
-  );
-}
-
-function ParserResultBar({ parsed, unparsed }: { parsed: number; unparsed: number }) {
-  const total = parsed + unparsed;
-  const parsedPercent = total > 0 ? Math.max(0, Math.min(100, (parsed / total) * 100)) : 0;
-
-  return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-amber-500">
-      <div
-        className="h-full rounded-full bg-emerald-500 transition-[width]"
-        style={{ width: `${parsedPercent}%` }}
-      />
-    </div>
-  );
-}
-
-function MetricTile({
-  title,
-  value,
-  detail,
-  icon: Icon,
-  tone = 'neutral',
-}: {
-  title: string;
-  value: string;
-  detail: string;
-  icon: LucideIcon;
-  tone?: MetricTone;
-}) {
-  const toneClass = toneClasses[tone];
-
-  return (
-    <Card>
-      <CardContent className="flex min-h-32 items-center gap-4 p-4 sm:p-5">
-        <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg ${toneClass.bg} ${toneClass.text}`}>
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{title}</p>
-          <p className="mt-1 truncate text-2xl font-bold text-gray-900 dark:text-white">{value}</p>
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{detail}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function SectionHeader({
-  icon: Icon,
-  title,
-  description,
-  actions,
-}: {
-  icon: LucideIcon;
-  title: string;
-  description: string;
-  actions?: ReactNode;
-}) {
-  return (
-    <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <div className="min-w-0">
-        <CardTitle className="flex items-center gap-2">
-          <Icon className="h-5 w-5 text-primary-600 dark:text-primary-400" />
-          {title}
-        </CardTitle>
-        <p className="mt-2 text-sm leading-6 text-gray-500 dark:text-gray-400">{description}</p>
-      </div>
-      {actions && (
-        <div className="shrink-0 sm:pt-0.5">
-          {actions}
-        </div>
-      )}
-    </CardHeader>
-  );
-}
-
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="rounded-lg border border-dashed border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-      {message}
-    </div>
-  );
-}
-
-function TooltipValue({ children, tone, tooltip, className = '' }: { children: ReactNode; tone: MetricTone; tooltip: string; className?: string }) {
-  return (
-    <span className="group relative inline-flex shrink-0">
-      <span
-        tabIndex={0}
-        aria-label={tooltip}
-        className={`rounded-md px-2 py-1 outline-none ring-offset-2 ring-offset-white focus:ring-2 focus:ring-primary-500 dark:ring-offset-gray-800 ${toneClasses[tone].bg} ${toneClasses[tone].text} ${className}`}
-      >
-        {children}
-      </span>
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-72 rounded-lg bg-gray-900 px-3 py-2 text-left text-xs font-normal leading-5 text-white shadow-lg group-hover:block group-focus-within:block dark:bg-gray-700"
-      >
-        {tooltip}
-      </span>
+    <span className="inline-flex items-center gap-2">
+      <SplitBar healthy={value} />
+      <Badge variant={value >= 0.8 ? 'success' : 'warning'}>{formatPercent(value)}</Badge>
     </span>
   );
 }
 
-function ParserSuccessBadge({ value, tooltip }: { value: number | null; tooltip: string }) {
-  return (
-    <TooltipValue tone={successTone(value)} tooltip={tooltip} className="text-xs font-semibold">
-      {formatPercent(value)}
-    </TooltipValue>
-  );
+function Duration({ seconds, warnAbove }: { seconds: number | null; warnAbove: number }) {
+  const { t } = useI18n();
+  if (seconds === null) return <Badge variant="secondary">{t('pages.metrics.notAvailable')}</Badge>;
+  return <Badge variant={seconds >= warnAbove ? 'warning' : 'success'}>{formatDuration(seconds)}</Badge>;
 }
 
-function TimingValue({ value, tooltip, fallback }: { value: number | null; tooltip: string; fallback: string }) {
+function RouteList({ routes = [] }: { routes?: CrowdsecMetricsRouteActivity[] }) {
+  const { t } = useI18n();
+  if (routes.length === 0) return <Muted>{t('pages.metrics.noRouteActivity')}</Muted>;
   return (
-    <TooltipValue tone={parserTimingTone(value)} tooltip={tooltip} className="font-mono text-lg font-bold">
-      {formatDuration(value, fallback)}
-    </TooltipValue>
-  );
-}
-
-function RouteActivityList({ routes, emptyMessage }: { routes?: CrowdsecMetricsRouteActivity[]; emptyMessage: string }) {
-  if (!routes || routes.length === 0) {
-    return <p className="text-xs text-gray-500 dark:text-gray-400">{emptyMessage}</p>;
-  }
-
-  return (
-    <div className="mt-3 space-y-1.5 border-t border-gray-100 pt-3 dark:border-gray-700/70">
+    <ul className="flex flex-col gap-0.5 font-mono text-xs">
       {routes.slice(0, 4).map((route) => (
-        <div key={`${route.method}-${route.route}`} className="flex items-center justify-between gap-3 text-xs">
-          <span className="min-w-0 truncate font-mono text-gray-500 dark:text-gray-400" title={`${route.method} ${route.route}`}>
-            <span className="font-semibold text-gray-700 dark:text-gray-300">{route.method}</span>{' '}{route.route}
-          </span>
-          <span className="shrink-0 font-mono font-semibold text-gray-700 dark:text-gray-200">{formatNumber(route.requests)}</span>
-        </div>
+        <li key={`${route.method} ${route.route}`} className="flex justify-between gap-4">
+          <span className="text-kumo-subtle"><span className="font-semibold text-kumo-default">{route.method}</span> {route.route}</span>
+          <span className="numeric">{formatNumber(route.requests)}</span>
+        </li>
       ))}
-    </div>
-  );
-}
-
-function bouncerModeVariant(mode: CrowdsecMetricsBouncerMode | undefined): 'success' | 'info' | 'warning' | 'secondary' {
-  if (mode === 'live') return 'success';
-  if (mode === 'stream') return 'info';
-  if (mode === 'mixed') return 'warning';
-  return 'secondary';
-}
-
-function EntityList({
-  title,
-  icon: Icon,
-  items,
-  emptyMessage,
-  description,
-  entityType,
-  fetchedAt,
-}: {
-  title: string;
-  icon: LucideIcon;
-  items: CrowdsecMetricsApiEntity[];
-  emptyMessage: string;
-  description: string;
-  entityType: 'bouncer' | 'machine';
-  fetchedAt: string;
-}) {
-  const { t } = useI18n();
-  const { formatDateTime } = useDateTime();
-  const isMachine = entityType === 'machine';
-
-  return (
-    <Card className="h-full">
-      <SectionHeader
-        icon={Icon}
-        title={title}
-        description={description}
-      />
-      <CardContent>
-        {items.length === 0 ? (
-          <EmptyState message={emptyMessage} />
-        ) : (
-          <div className="space-y-3">
-            {items.map((item) => {
-              const nonEmptyDecisions = item.decisionsOk || 0;
-              const emptyDecisions = item.decisionsKo || 0;
-              const decisionTotal = nonEmptyDecisions + emptyDecisions;
-              const machineAlertRequests = item.alertRequests ?? item.routes
-                ?.filter((route) => route.method === 'POST' && route.route === '/v1/alerts')
-                .reduce((sum, route) => sum + route.requests, 0)
-                ?? item.requests;
-              const heartbeatRequests = item.heartbeatRequests ?? item.routes
-                ?.filter((route) => route.route === '/v1/heartbeat')
-                .reduce((sum, route) => sum + route.requests, 0)
-                ?? 0;
-              const otherRequests = item.otherRequests ?? Math.max(item.requests - machineAlertRequests - heartbeatRequests, 0);
-              const mode = item.mode || (decisionTotal > 0 ? 'live' : undefined);
-              const showDecisionResponses = !isMachine && mode !== 'stream' && decisionTotal > 0;
-              const heartbeatStatus = machineHeartbeatStatus(item.lastHeartbeatAt, heartbeatRequests, fetchedAt);
-              const heartbeatVariant = heartbeatStatus === 'online'
-                ? 'success'
-                : heartbeatStatus === 'observed'
-                  ? 'info'
-                  : 'warning';
-              const heartbeatLabel = heartbeatStatus === 'online'
-                ? t('pages.metrics.heartbeatOnline')
-                : heartbeatStatus === 'stale'
-                  ? t('pages.metrics.heartbeatStale')
-                  : heartbeatStatus === 'observed'
-                    ? t('pages.metrics.heartbeatObserved')
-                    : t('pages.metrics.heartbeatNotObserved');
-              const heartbeatTitle = item.lastHeartbeatAt && (heartbeatStatus === 'online' || heartbeatStatus === 'stale')
-                ? t('pages.metrics.heartbeatLastSeenDescription', { time: formatMetricDateTime(item.lastHeartbeatAt, formatDateTime) })
-                : heartbeatStatus === 'observed'
-                  ? t('pages.metrics.heartbeatObservedDescription')
-                  : undefined;
-
-              return (
-                <div key={`${item.source_id || ''}-${item.name}`} className="rounded-lg border border-gray-100 p-3 dark:border-gray-700/70">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.name}>{item.name}</p>
-                        <MetricsSourceBadge sourceId={item.source_id} />
-                        {!isMachine && (
-                          <Badge variant={bouncerModeVariant(mode)}>
-                            {t(`pages.metrics.modes.${mode || 'unknown'}`)}
-                          </Badge>
-                        )}
-                        {isMachine && (
-                          <Badge
-                            variant={heartbeatVariant}
-                            title={heartbeatTitle}
-                          >
-                            {heartbeatLabel}
-                          </Badge>
-                        )}
-                      </div>
-                      <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
-                        {item.topMethod && item.topRoute ? `${item.topMethod} ${item.topRoute}` : t('pages.metrics.noRouteActivity')}
-                      </p>
-                    </div>
-                    <div className="text-left sm:text-right">
-                      <p className="font-mono text-lg font-semibold text-gray-900 dark:text-white">{formatNumber(isMachine ? machineAlertRequests : item.requests)}</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        {isMachine ? t('pages.metrics.labels.alertPosts') : t('pages.metrics.labels.requests')}
-                      </p>
-                    </div>
-                  </div>
-                  {isMachine ? (
-                    <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-                      <div>
-                        <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white">{formatNumber(machineAlertRequests)}</p>
-                        <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.alertPosts')}</p>
-                      </div>
-                      <div>
-                        <p className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-300">{formatNumber(heartbeatRequests)}</p>
-                        <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.heartbeats')}</p>
-                      </div>
-                      <div>
-                        <p className="font-mono text-sm font-semibold text-gray-700 dark:text-gray-200">{formatNumber(otherRequests)}</p>
-                        <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.otherApi')}</p>
-                      </div>
-                    </div>
-                  ) : showDecisionResponses ? (
-                    <div className="mt-3">
-                      <DecisionResponseBar empty={emptyDecisions} nonEmpty={nonEmptyDecisions} />
-                      <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
-                        <div>
-                          <p className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-300">
-                            {formatNumber(emptyDecisions)}
-                          </p>
-                          <p className="text-gray-500 dark:text-gray-400">
-                            {t('pages.metrics.labels.empty', { count: '' }).trim()}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="font-mono text-sm font-semibold text-amber-700 dark:text-amber-300">
-                            {formatNumber(nonEmptyDecisions)}
-                          </p>
-                          <p className="text-gray-500 dark:text-gray-400">
-                            {t('pages.metrics.labels.nonEmpty', { count: '' }).trim()}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  ) : mode === 'stream' ? (
-                    <p className="mt-3 rounded-md bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
-                      {t('pages.metrics.streamModeDescription')}
-                    </p>
-                  ) : null}
-                  <RouteActivityList routes={item.routes} emptyMessage={t('pages.metrics.noRouteActivity')} />
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {!isMachine && (
-          <p className="mt-3 rounded-md bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
-            {t('pages.metrics.remediationMetricsNote')}
-          </p>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
-  const { t } = useI18n();
-
-  return (
-    <Card className="overflow-visible">
-      <SectionHeader
-        icon={FileSearch}
-        title={t('pages.metrics.parserSources')}
-        description={t('pages.metrics.parserSourcesDescription')}
-      />
-      <CardContent>
-        {items.length === 0 ? (
-          <EmptyState message={t('pages.metrics.emptyParserSources')} />
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {items.map((item) => (
-              <div key={`${item.source_id || ''}-${item.source}-${item.type}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700/70">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.source}>{item.source}</p>
-                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {item.type}{item.acquisTypes.length > 0 ? ` / ${item.acquisTypes.join(', ')}` : ''}
-                    </p>
-                    <div className="mt-2"><MetricsSourceBadge sourceId={item.source_id} /></div>
-                  </div>
-                  <ParserSuccessBadge
-                    value={item.successRate}
-                    tooltip={t('pages.metrics.parserSuccessTooltip')}
-                  />
-                </div>
-                <div className="mt-4">
-                  <ParserResultBar parsed={item.parsedOk} unparsed={item.parsedKo} />
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-5">
-                  <div>
-                    <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white">{formatOptionalNumber(item.linesRead)}</p>
-                    <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.read')}</p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-300">{formatNumber(item.parsedOk)}</p>
-                    <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.parsed')}</p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-sm font-semibold text-amber-800 dark:text-amber-300">{formatNumber(item.parsedKo)}</p>
-                    <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.unparsed')}</p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white">{formatNumber(item.pouredToBucket)}</p>
-                    <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.poured')}</p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white">{formatNumber(item.whitelisted)}</p>
-                    <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.whitelisted')}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function AppsecActivityBar({ requests, blocked }: { requests: number; blocked: number }) {
-  const allowed = Math.max(requests - blocked, 0);
-  const total = requests > 0 ? requests : blocked;
-  const allowedPercent = total > 0 ? Math.max(0, Math.min(100, (allowed / total) * 100)) : 0;
-  const blockedPercent = total > 0 ? Math.max(0, Math.min(100, (blocked / total) * 100)) : 0;
-
-  return (
-    <div className="flex h-2 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
-      <div
-        className="h-full bg-emerald-500 transition-[width]"
-        style={{ width: `${allowedPercent}%` }}
-      />
-      <div
-        className="h-full bg-amber-500 transition-[width]"
-        style={{ width: `${blockedPercent}%` }}
-      />
-    </div>
-  );
-}
-
-function ScenarioList({ items }: { items?: CrowdsecMetricsScenario[] }) {
-  const { t } = useI18n();
-  const scenarios = items || [];
-
-  return (
-    <Card>
-      <SectionHeader
-        icon={Activity}
-        title={t('pages.metrics.scenarios')}
-        description={t('pages.metrics.scenariosDescription')}
-      />
-      <CardContent>
-        {scenarios.length === 0 ? (
-          <EmptyState message={t('pages.metrics.emptyScenarios')} />
-        ) : (
-          <div className="overflow-x-auto rounded-lg border border-gray-100 dark:border-gray-700/70">
-            <div className="min-w-[780px]">
-              <div className="grid grid-cols-[minmax(0,2fr)_100px_110px_100px_100px_100px_100px] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-semibold uppercase text-gray-500 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-400">
-                <span>{t('pages.metrics.columns.scenario')}</span>
-                <span className="text-right">{t('pages.metrics.columns.current')}</span>
-                <span className="text-right">{t('pages.metrics.columns.instantiated')}</span>
-                <span className="text-right">{t('pages.metrics.columns.overflowed')}</span>
-                <span className="text-right">{t('pages.metrics.columns.poured')}</span>
-                <span className="text-right">{t('pages.metrics.columns.expired')}</span>
-                <span className="text-right">{t('pages.metrics.columns.canceled')}</span>
-              </div>
-              <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
-                {scenarios.map((item) => (
-                  <div key={`${item.source_id || ''}-${item.name}`} className="grid grid-cols-[minmax(0,2fr)_100px_110px_100px_100px_100px_100px] gap-3 px-4 py-3">
-                    <div className="min-w-0">
-                      <div className="truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</div>
-                      <div className="mt-1"><MetricsSourceBadge sourceId={item.source_id} /></div>
-                    </div>
-                    <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.current)}</div>
-                    <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.instantiations)}</div>
-                    <div className="font-mono text-sm text-amber-700 dark:text-amber-300 text-right">{formatNumber(item.overflows)}</div>
-                    <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.poured)}</div>
-                    <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.underflows)}</div>
-                    <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.canceled)}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function ParserNodeList({ items, showChildNodes, onShowChildNodesChange }: { items: CrowdsecMetricsParserNode[]; showChildNodes: boolean; onShowChildNodesChange: (next: boolean) => void }) {
-  const { t } = useI18n();
-  const notAvailable = t('pages.metrics.notAvailable');
-  const visibleItems = showChildNodes ? items : items.filter((item) => !item.isChild);
-  const switchId = 'show-child-parser-nodes';
-  const switchLabelId = `${switchId}-label`;
-
-  return (
-    <Card>
-      <SectionHeader
-        icon={DatabaseZap}
-        title={t('pages.metrics.parserNodes')}
-        description={t('pages.metrics.parserNodesDescription')}
-        actions={items.length > 0 ? (
-          <div className="flex items-center gap-2 rounded-md border border-gray-100 bg-gray-50 px-2.5 py-1.5 dark:border-gray-700/70 dark:bg-gray-900/40">
-            <label id={switchLabelId} htmlFor={switchId} className="whitespace-nowrap text-xs font-medium text-gray-700 dark:text-gray-200">
-              {t('pages.metrics.showChildParserNodes')}
-            </label>
-            <Switch id={switchId} checked={showChildNodes} onCheckedChange={onShowChildNodesChange} ariaLabelledBy={switchLabelId} />
-          </div>
-        ) : undefined}
-      />
-      <CardContent>
-        {items.length === 0 ? (
-          <EmptyState message={t('pages.metrics.emptyParserNodes')} />
-        ) : visibleItems.length === 0 ? (
-          <EmptyState message={t('pages.metrics.emptyParserNodesAfterFilter')} />
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-gray-700/70">
-            <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1fr)_110px_110px] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-semibold uppercase text-gray-500 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-400 lg:grid">
-              <span>{t('pages.metrics.columns.node')}</span>
-              <span>{t('pages.metrics.columns.stage')}</span>
-              <span className="text-right">{t('pages.metrics.columns.processed')}</span>
-              <span className="text-right">{t('pages.metrics.columns.success')}</span>
-            </div>
-            <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
-              {visibleItems.map((item) => (
-                <div key={`${item.source_id || ''}-${item.name}-${item.stage}-${item.source}-${item.acquisType || ''}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_110px_110px] lg:items-center lg:gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</p>
-                    <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400" title={item.source}>
-                      {item.type} / {item.source}
-                    </p>
-                    <div className="mt-1"><MetricsSourceBadge sourceId={item.source_id} /></div>
-                  </div>
-                  <div className="text-sm text-gray-600 dark:text-gray-300">{item.stage}</div>
-                  <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.processed)}</div>
-                  <div className="space-y-1 lg:text-right">
-                    <span className="text-sm font-semibold text-gray-900 dark:text-white">{formatPercent(item.successRate, notAvailable)}</span>
-                    <ProgressBar value={item.successRate} tone={successTone(item.successRate)} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function WhitelistList({ items }: { items: CrowdsecMetricsWhitelist[] }) {
-  const { t } = useI18n();
-
-  if (items.length === 0) {
-    return null;
-  }
-
-  return (
-    <Card>
-      <SectionHeader
-        icon={ListChecks}
-        title={t('pages.metrics.whitelists')}
-        description={t('pages.metrics.whitelistsDescription')}
-      />
-      <CardContent>
-        <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-gray-700/70">
-          <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,2fr)_100px_120px] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-semibold uppercase text-gray-500 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-400 lg:grid">
-            <span>{t('pages.metrics.columns.whitelist')}</span>
-            <span>{t('pages.metrics.columns.reason')}</span>
-            <span className="text-right">{t('pages.metrics.columns.hits')}</span>
-            <span className="text-right">{t('pages.metrics.columns.whitelisted')}</span>
-          </div>
-          <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
-            {items.map((item) => (
-              <div key={`${item.source_id || ''}-${item.name}-${item.reason}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_100px_120px] lg:items-center lg:gap-3">
-                <div className="min-w-0">
-                  <p className="truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</p>
-                  <div className="mt-1"><MetricsSourceBadge sourceId={item.source_id} /></div>
-                </div>
-                <div className="truncate text-sm text-gray-600 dark:text-gray-300" title={item.reason}>{item.reason}</div>
-                <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.hits)}</div>
-                <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.whitelisted)}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function TimingList({ items }: { items: CrowdsecMetricsTiming[] }) {
-  const { t } = useI18n();
-  const notAvailable = t('pages.metrics.notAvailable');
-  const timingTooltip = t('pages.metrics.parserTimingTooltip');
-
-  return (
-    <Card className="overflow-visible">
-      <SectionHeader
-        icon={Clock3}
-        title={t('pages.metrics.parserTiming')}
-        description={t('pages.metrics.parserTimingDescription')}
-      />
-      <CardContent>
-        {items.length === 0 ? (
-          <EmptyState message={t('pages.metrics.emptyParserTiming')} />
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {items.map((item) => (
-              <div key={`${item.source_id || ''}-${item.source}-${item.type}`} className="rounded-lg bg-gray-50 p-4 dark:bg-gray-900/40">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.source}>{item.source}</p>
-                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{item.type}</p>
-                    <div className="mt-2"><MetricsSourceBadge sourceId={item.source_id} /></div>
-                  </div>
-                  <TimingValue value={item.averageSeconds} tooltip={timingTooltip} fallback={notAvailable} />
-                </div>
-                <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">{t('pages.metrics.parsedLinesTimed', { count: formatNumber(item.count) })}</p>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function LapiLatencyList({ items }: { items?: CrowdsecMetricsLapiRoute[] }) {
-  const { t } = useI18n();
-  const notAvailable = t('pages.metrics.notAvailable');
-  const routes = items || [];
-
-  return (
-    <Card>
-      <SectionHeader
-        icon={Network}
-        title={t('pages.metrics.lapiLatency')}
-        description={t('pages.metrics.lapiLatencyDescription')}
-      />
-      <CardContent>
-        {routes.length === 0 ? (
-          <EmptyState message={t('pages.metrics.emptyLapiLatency')} />
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-gray-700/70">
-            <div className="hidden grid-cols-[90px_minmax(0,2fr)_110px_130px] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-semibold uppercase text-gray-500 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-400 lg:grid">
-              <span>{t('pages.metrics.columns.method')}</span>
-              <span>{t('pages.metrics.columns.route')}</span>
-              <span className="text-right">{t('pages.metrics.columns.requests')}</span>
-              <span className="text-right">{t('pages.metrics.columns.average')}</span>
-            </div>
-            <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
-              {routes.map((item) => {
-                const tone = latencyTone(item.averageSeconds);
-
-                return (
-                  <div key={`${item.source_id || ''}-${item.method}-${item.route}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[90px_minmax(0,2fr)_110px_130px] lg:items-center lg:gap-3">
-                    <div className="font-mono text-xs font-semibold text-gray-600 dark:text-gray-300">{item.method}</div>
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-gray-900 dark:text-white" title={item.route}>{item.route}</div>
-                      <div className="mt-1"><MetricsSourceBadge sourceId={item.source_id} /></div>
-                    </div>
-                    <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.requests)}</div>
-                    <div className={`font-mono text-sm font-semibold lg:text-right ${toneClasses[tone].text}`}>{formatDuration(item.averageSeconds, notAvailable)}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) {
-  const { t } = useI18n();
-  const notAvailable = t('pages.metrics.notAvailable');
-  const engines = items || [];
-  const blockRateTooltip = t('pages.metrics.appsecBlockRateTooltip');
-
-  return (
-    <Card className="overflow-visible">
-      <SectionHeader
-        icon={ShieldOff}
-        title={t('pages.metrics.appsecEngines')}
-        description={t('pages.metrics.appsecEnginesDescription')}
-      />
-      <CardContent>
-        {engines.length === 0 ? (
-          <EmptyState message={t('pages.metrics.emptyAppsecEngines')} />
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {engines.map((item) => {
-              const blockTone: MetricTone = item.blocked > 0 ? 'warning' : 'neutral';
-              const allowed = Math.max(item.requests - item.blocked, 0);
-
-              return (
-                <div key={`${item.source_id || ''}-${item.engine}-${item.source}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700/70">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.engine}>{item.engine}</p>
-                      <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400" title={item.source}>{item.source}</p>
-                      <div className="mt-2"><MetricsSourceBadge sourceId={item.source_id} /></div>
-                    </div>
-                    <TooltipValue tone={blockTone} tooltip={blockRateTooltip} className="text-xs font-semibold">
-                      {formatPercent(item.blockRate, notAvailable)}
-                    </TooltipValue>
-                  </div>
-                  <div className="mt-4">
-                    <AppsecActivityBar requests={item.requests} blocked={item.blocked} />
-                  </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-                    <div className="text-left">
-                      <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white">{formatNumber(item.requests)}</p>
-                      <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.requests')}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-300">{formatNumber(allowed)}</p>
-                      <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.allowed')}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-mono text-sm font-semibold text-amber-700 dark:text-amber-300">{formatNumber(item.blocked)}</p>
-                      <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.blocked')}</p>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-type MetricsSourceSummaryItem = {
-  key: string;
-  label: string;
-  value: ReactNode;
-  title?: string;
-  valueClassName: string;
-};
-
-function MetricsSourceSummary({ data }: { data: CrowdsecMetricsResponse }) {
-  const { t } = useI18n();
-  const { formatDateTime } = useDateTime();
-  const activeDecisions = data.totals.activeDecisions;
-  const alerts = data.totals.alerts;
-  const summaryMetricCandidates: Array<MetricsSourceSummaryItem | null> = [
-    data.crowdsecVersion
-      ? {
-        key: 'version',
-        label: t('pages.metrics.version'),
-        value: data.crowdsecVersion,
-        valueClassName: 'text-sm text-gray-900 dark:text-white',
-      }
-      : null,
-    data.crowdsecStartedAt
-      ? {
-        key: 'started',
-        label: t('pages.metrics.started'),
-        value: <time dateTime={data.crowdsecStartedAt}>{formatMetricDateTime(data.crowdsecStartedAt, formatDateTime)}</time>,
-        title: data.crowdsecStartedAt,
-        valueClassName: 'text-sm text-gray-900 dark:text-white',
-      }
-      : null,
-    activeDecisions === undefined
-      ? null
-      : {
-        key: 'active-decisions',
-        label: t('pages.metrics.activeDecisions', { count: '' }).trim(),
-        value: formatNumber(activeDecisions),
-        valueClassName: 'text-xl text-primary-700 dark:text-primary-300',
-      },
-    alerts === undefined
-      ? null
-      : {
-        key: 'alerts',
-        label: t('pages.metrics.alerts', { count: '' }).trim(),
-        value: formatNumber(alerts),
-        valueClassName: 'text-xl text-gray-900 dark:text-white',
-      },
-  ];
-  const summaryMetrics = summaryMetricCandidates.filter((metric): metric is MetricsSourceSummaryItem => metric !== null);
-  const summaryMetricLayout = summaryMetrics.length === 1
-    ? 'grid-cols-1 2xl:w-[13rem] 2xl:grid-cols-1'
-    : summaryMetrics.length === 2
-      ? 'grid-cols-2 2xl:w-[24rem] 2xl:grid-cols-2'
-      : summaryMetrics.length === 3
-        ? 'grid-cols-2 2xl:w-[38rem] 2xl:grid-cols-3'
-        : 'grid-cols-2 2xl:w-[50rem] 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.45fr)_minmax(0,1.15fr)_minmax(0,0.85fr)]';
-
-  return (
-    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-      <div className={summaryMetrics.length > 0 ? 'grid 2xl:grid-cols-[minmax(0,1fr)_auto]' : undefined}>
-        <div className="flex items-center gap-3 px-4 py-3.5 sm:px-5">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400">
-            <DatabaseZap className="h-4 w-4" aria-hidden="true" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-sm leading-6 text-gray-600 dark:text-gray-300">{t('pages.metrics.counterScope')}</p>
-          </div>
-        </div>
-        {summaryMetrics.length > 0 && (
-          <dl
-            className={`grid gap-2 border-t border-gray-100 p-2 dark:border-gray-700/70 2xl:border-t-0 ${summaryMetricLayout}`}
-          >
-            {summaryMetrics.map((metric) => (
-              <div key={metric.key} className="min-w-0 rounded-lg border border-gray-100 bg-gray-50 px-4 py-2.5 dark:border-gray-700/70 dark:bg-gray-900/30 sm:px-5">
-                <dt className="text-xs font-medium text-gray-500 dark:text-gray-400">{metric.label}</dt>
-                <dd className={`mt-1 truncate font-mono font-semibold tabular-nums ${metric.valueClassName}`} title={metric.title}>{metric.value}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function CombinedSourcesSummary({ sources, includeInstance }: { sources: CrowdsecMetricsSource[]; includeInstance: boolean }) {
-  const { t } = useI18n();
-  const { formatDateTime } = useDateTime();
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('pages.metrics.combinedSources')}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {sources.map((source, index) => {
-            const label = includeInstance
-              ? `${source.instance_name} — ${source.endpoint_name}`
-              : source.endpoint_name;
-            return (
-              <div key={source.id} className="rounded-lg border border-gray-100 p-3 dark:border-gray-700/70">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <InstanceIcon
-                      icon={source.endpoint_icon || (includeInstance ? source.instance_icon : undefined)}
-                      colorIndex={index}
-                    />
-                    <p className="min-w-0 truncate font-semibold text-gray-900 dark:text-white" title={label}>{label}</p>
-                  </div>
-                  <Badge variant={source.status === 'available' ? 'success' : 'warning'}>
-                    {t(source.status === 'available'
-                      ? 'pages.metrics.sourceAvailable'
-                      : 'pages.metrics.sourceUnavailable')}
-                  </Badge>
-                </div>
-                {source.status === 'available' ? (
-                  <div className="mt-2 space-y-1 text-xs text-gray-500 dark:text-gray-400">
-                    {source.crowdsecVersion && <p>{t('pages.metrics.version')}: {source.crowdsecVersion}</p>}
-                    {source.crowdsecStartedAt && (
-                      <p>{t('pages.metrics.started')}: {formatMetricDateTime(source.crowdsecStartedAt, formatDateTime)}</p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="mt-2 break-words text-xs text-amber-800 dark:text-amber-200">{source.error}</p>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </CardContent>
-    </Card>
+    </ul>
   );
 }
 
 export function Metrics() {
   const { t } = useI18n();
-  const { refreshSignal } = useRefresh();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
-  const setSearchParams = useCallback((next: URLSearchParams, options?: { replace?: boolean }) => {
-    const nextSearch = next.toString();
-    void navigate({
-      pathname: location.pathname,
-      search: nextSearch ? `?${nextSearch}` : '',
-      hash: location.hash,
-    }, { replace: options?.replace });
-  }, [location.hash, location.pathname, navigate]);
-  const [state, setState] = useState<MetricsState>({ status: 'loading' });
-  const [instances, setInstances] = useState<InstanceSummary[]>([]);
-  const [showChildParserNodes, setShowChildParserNodes] = useState(readStoredShowChildParserNodes);
-  const requestedInstanceId = searchParams.get('instance');
-  const requestedEndpointId = searchParams.get('endpoint');
-  const requestedMetricsInstanceId = searchParams.get('metrics_instance');
+  const { formatDateTime } = useDateTime();
+  const { config } = useRefresh();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [showChildNodes, setShowChildNodes] = useState(() => window.localStorage.getItem(SHOW_CHILD_PARSER_NODES_STORAGE_KEY) === 'true');
 
-  const handleShowChildParserNodesChange = useCallback((next: boolean) => {
-    setShowChildParserNodes(next);
-    saveShowChildParserNodes(next);
-  }, []);
+  const instances = config?.instances ?? [];
+  const scope = searchParams.get('instance') || (instances.length === 1 ? instances[0].id : 'all');
+  const includeInstance = scope === 'all';
+  const choices = instances
+    .filter((instance) => includeInstance || instance.id === scope)
+    .flatMap((instance) => instance.prometheus.map((endpoint) => ({ instance, endpoint })));
+  const requestedEndpoint = searchParams.get('endpoint');
+  const selected = choices.find(({ instance, endpoint }) =>
+    endpoint.id === requestedEndpoint && (!includeInstance || instance.id === searchParams.get('metrics_instance')));
+  const combined = choices.length > 1 && (requestedEndpoint === COMBINED_ENDPOINT_ID || !selected);
+  const choice = selected ?? choices[0];
+  const selection = combined ? COMBINED_ENDPOINT_ID : choice ? `${choice.instance.id}:${choice.endpoint.id}` : '';
+  const disabled = instances.length === 0 ? config?.metrics_enabled === false : choices.length === 0;
+  const ready = config !== null && !disabled;
 
-  const load = useCallback(async (background = false) => {
-    if (!background) setState({ status: 'loading' });
+  const metrics = useServerData<CrowdsecMetricsResponse | null>(ready ? `${scope}|${selection}` : '', () => {
+    if (!ready) return Promise.resolve(null);
+    return combined ? fetchCombinedCrowdsecMetrics(scope) : fetchCrowdsecMetrics(choice?.instance.id, choice?.endpoint.id);
+  });
+  const data = metrics.data;
 
-    try {
-      const config = await fetchConfig();
-      const configuredInstances = config.instances || [];
-      setInstances(configuredInstances);
-      if (configuredInstances.length === 0) {
-        if (config.metrics_enabled === false) {
-          setState({ status: 'disabled' });
-          return;
-        }
-        const data = await fetchCrowdsecMetrics();
-        setState({ status: 'ready', data });
-        return;
-      }
-      const instanceScope = requestedInstanceId || (configuredInstances.length > 1 ? 'all' : configuredInstances[0].id);
-      const scopedInstances = instanceScope === 'all'
-        ? configuredInstances
-        : [configuredInstances.find((instance) => instance.id === instanceScope) || configuredInstances[0]];
-      const endpointChoices = scopedInstances.flatMap((instance) =>
-        instance.prometheus.map((endpoint) => ({ instance, endpoint })),
-      );
-      if (endpointChoices.length === 0) {
-        setState({ status: 'disabled' });
-        return;
-      }
+  const selectEndpoint = (value: string | null) => {
+    const next = choices.find(({ instance, endpoint }) => `${instance.id}:${endpoint.id}` === value);
+    setSearchParams((current) => {
+      const params = new URLSearchParams(current);
+      params.set('endpoint', next ? next.endpoint.id : COMBINED_ENDPOINT_ID);
+      if (next && includeInstance) params.set('metrics_instance', next.instance.id);
+      else params.delete('metrics_instance');
+      return params;
+    });
+  };
 
-      const selectedChoice = endpointChoices.find(({ instance, endpoint }) =>
-        endpoint.id === requestedEndpointId
-        && (instanceScope !== 'all' || instance.id === requestedMetricsInstanceId),
-      );
-      const combinedSelected = endpointChoices.length > 1
-        && (requestedEndpointId === COMBINED_ENDPOINT_ID || !selectedChoice);
-      const nextParams = new URLSearchParams(searchParams);
-      if (combinedSelected) {
-        nextParams.set('endpoint', COMBINED_ENDPOINT_ID);
-        nextParams.delete('metrics_instance');
-      } else {
-        const effectiveChoice = selectedChoice || endpointChoices[0];
-        nextParams.set('endpoint', effectiveChoice.endpoint.id);
-        if (instanceScope === 'all') {
-          nextParams.set('metrics_instance', effectiveChoice.instance.id);
-        } else {
-          nextParams.delete('metrics_instance');
-        }
-      }
-      if (nextParams.toString() !== searchParams.toString()) {
-        setSearchParams(nextParams, { replace: true });
-      }
-      const data = combinedSelected
-        ? await fetchCombinedCrowdsecMetrics(instanceScope)
-        : await fetchCrowdsecMetrics(
-          (selectedChoice || endpointChoices[0]).instance.id,
-          (selectedChoice || endpointChoices[0]).endpoint.id,
-        );
-      setState({ status: 'ready', data });
-    } catch (error: unknown) {
-      setState({ status: 'error', message: getErrorMessage(error, t('pages.metrics.fetchFailed')) });
+  const endpointOptions = [
+    { value: COMBINED_ENDPOINT_ID, icon: <IntersectIcon size={16} className="shrink-0 text-kumo-subtle" />, label: t('pages.metrics.combined') },
+    ...choices.map(({ instance, endpoint }, index) => ({
+      value: `${instance.id}:${endpoint.id}`,
+      icon: <InstanceIcon name={includeInstance ? instance.name : endpoint.name} colorIndex={includeInstance ? instances.indexOf(instance) : index} />,
+      label: includeInstance ? `${instance.name} — ${endpoint.name}` : endpoint.name,
+    })),
+  ];
+  const endpointOption = (value: string) => {
+    const option = endpointOptions.find((candidate) => candidate.value === value);
+    return option ? <span className="flex min-w-0 items-center gap-2">{option.icon}<span className="truncate">{option.label}</span></span> : null;
+  };
+
+  const changeShowChildNodes = (checked: boolean) => {
+    setShowChildNodes(checked);
+    window.localStorage.setItem(SHOW_CHILD_PARSER_NODES_STORAGE_KEY, String(checked));
+  };
+
+  const aggregation = data?.aggregation;
+  const sourceLabels = new Map(aggregation?.sources.map((source) => [
+    source.id,
+    includeInstance ? `${source.instance_name} — ${source.endpoint_name}` : source.endpoint_name,
+  ]));
+  const sourceCells = new Map(aggregation?.sources.map((source, index) => [source.id, (
+    <span className="flex min-w-0 items-center gap-2">
+      <InstanceIcon name={includeInstance ? source.instance_name : source.endpoint_name} colorIndex={includeInstance ? instances.findIndex((instance) => instance.id === source.instance_id) : index} />
+      <span className="truncate" title={sourceLabels.get(source.id)}>{sourceLabels.get(source.id)}</span>
+    </span>
+  )]));
+  // Rows name their metrics endpoint only in a combined response
+  const sourceOf = aggregation ? (row: { source_id?: string }) => sourceCells.get(row.source_id ?? '') : undefined;
+
+  const heartbeat = (lastHeartbeatAt: string | null | undefined, heartbeats: number) => {
+    if (!lastHeartbeatAt) {
+      return heartbeats > 0
+        ? { variant: 'info' as const, label: t('pages.metrics.heartbeatObserved'), title: t('pages.metrics.heartbeatObservedDescription') }
+        : { variant: 'warning' as const, label: t('pages.metrics.heartbeatNotObserved') };
     }
-  }, [requestedEndpointId, requestedInstanceId, requestedMetricsInstanceId, searchParams, setSearchParams, t]);
-
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      void load();
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [load]);
-
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      if (state.status === 'ready') {
-        void load(true);
-      }
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [load, refreshSignal, state.status]);
-
-  const content = useMemo(() => {
-    if (state.status === 'loading') {
-      return (
-        <Card>
-          <CardContent className="p-8 text-center text-gray-500 dark:text-gray-400">{t('app.loading')}</CardContent>
-        </Card>
-      );
-    }
-
-    if (state.status === 'disabled') {
-      return (
-        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
-            {t('pages.metrics.disabledTitle')}{' '}
-            {t('pages.metrics.disabledPrefix')}{' '}
-            <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-xs dark:bg-amber-900/50">
-              CONFIG_INSTANCE_METRICS_URL
-            </code>{' '}
-            {t('pages.metrics.disabledMiddle')}{' '}
-            <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-xs dark:bg-amber-900/50">full</code>{' '}
-            {t('pages.metrics.disabledSuffix')}
-          </span>
-        </div>
-      );
-    }
-
-    if (state.status === 'error') {
-      return (
-        <Card>
-          <CardContent className="flex flex-col gap-4 p-6">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
-              <div className="min-w-0">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{t('pages.metrics.unavailableTitle')}</h2>
-                <p className="mt-2 break-words text-sm leading-6 text-gray-600 dark:text-gray-300">{state.message}</p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => void load()}
-              className="inline-flex w-fit items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700"
-            >
-              <RefreshCw className="h-4 w-4" />
-              {t('pages.metrics.retry')}
-            </button>
-          </CardContent>
-        </Card>
-      );
-    }
-
-    const { data } = state;
-    const aggregation = data.aggregation;
-    const currentInstanceScope = requestedInstanceId || (instances.length > 1 ? 'all' : instances[0]?.id);
-    const includeInstanceInSource = currentInstanceScope === 'all';
-    const metricsSourcesContext = {
-      sources: new Map((aggregation?.sources || []).map((source) => [source.id, source])),
-      includeInstance: includeInstanceInSource,
+    const online = new Date(data?.fetched_at ?? 0).getTime() - new Date(lastHeartbeatAt).getTime() <= MACHINE_ONLINE_WINDOW_MS;
+    return {
+      variant: online ? 'success' as const : 'warning' as const,
+      label: t(online ? 'pages.metrics.heartbeatOnline' : 'pages.metrics.heartbeatStale'),
+      title: t('pages.metrics.heartbeatLastSeenDescription', { time: formatDateTime(lastHeartbeatAt) }),
     };
-    const machineAlertRequests = data.totals.machineAlertRequests ?? data.machines.reduce(
-      (sum, machine) => sum + (machine.alertRequests ?? machine.routes
-        ?.filter((route) => route.method === 'POST' && route.route === '/v1/alerts')
-        .reduce((routeSum, route) => routeSum + route.requests, 0) ?? machine.requests),
-      0,
-    );
-    const machineHeartbeatRequests = data.totals.machineHeartbeatRequests ?? data.machines.reduce(
-      (sum, machine) => sum + (machine.heartbeatRequests ?? machine.routes
-        ?.filter((route) => route.route === '/v1/heartbeat')
-        .reduce((routeSum, route) => routeSum + route.requests, 0) ?? 0),
-      0,
-    );
+  };
 
-    return (
-      <MetricsSourcesContext.Provider value={metricsSourcesContext}>
-      <div className="space-y-6">
-        {aggregation?.partial && (
-          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{t('pages.metrics.partialWarning', {
-              sources: aggregation.sources
-                .filter((source) => source.status === 'unavailable')
-                .map((source) => includeInstanceInSource ? `${source.instance_name} — ${source.endpoint_name}` : source.endpoint_name)
-                .join(', '),
-            })}</span>
-          </div>
-        )}
-        <MetricsSourceSummary data={data} />
-        {aggregation && <CombinedSourcesSummary sources={aggregation.sources} includeInstance={includeInstanceInSource} />}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 min-[1800px]:grid-cols-6">
-          <MetricTile title={t('pages.metrics.remediationComponentApiRequests')} value={formatNumber(data.totals.bouncerRequests)} detail={t('pages.metrics.groupedByBouncer')} icon={ShieldCheck} />
-          <MetricTile title={t('pages.metrics.machineAlertPosts')} value={formatNumber(machineAlertRequests)} detail={t('pages.metrics.machineAlertPostsDetail', { calls: formatNumber(data.totals.machineRequests), heartbeats: formatNumber(machineHeartbeatRequests) })} icon={Server} />
-          <MetricTile title={t('pages.metrics.appsecRequests')} value={formatNumber(data.totals.appsecRequests)} detail={t('pages.metrics.blockedCount', { count: formatNumber(data.totals.appsecBlocked) })} icon={ShieldOff} />
-          <MetricTile title={t('pages.metrics.whitelistHits')} value={formatNumber(data.totals.whitelistHits)} detail={t('pages.metrics.whitelistedCount', { count: formatNumber(data.totals.whitelisted) })} icon={ListChecks} />
-          <MetricTile title={t('pages.metrics.parserEvents')} value={formatNumber(data.totals.parserProcessed)} detail={t('pages.metrics.unparsedCount', { count: formatNumber(data.totals.parserKo) })} icon={Activity} />
-          <MetricTile title={t('pages.metrics.parsedSuccessfully')} value={formatPercent(data.totals.parserSuccessRate, t('pages.metrics.notAvailable'))} detail={t('pages.metrics.averageDuration', { duration: formatDuration(data.totals.parserAverageSeconds, t('pages.metrics.notAvailable')) })} icon={CheckCircle2} />
-        </div>
-
-        <div className="grid gap-6 xl:grid-cols-2">
-          <EntityList title={t('pages.metrics.remediationComponents')} icon={ShieldCheck} items={data.bouncers} emptyMessage={t('pages.metrics.emptyBouncers')} description={t('pages.metrics.bouncersDescription')} entityType="bouncer" fetchedAt={data.fetched_at} />
-          <EntityList title={t('pages.metrics.logProcessors')} icon={Bot} items={data.machines} emptyMessage={t('pages.metrics.emptyMachines')} description={t('pages.metrics.machinesDescription')} entityType="machine" fetchedAt={data.fetched_at} />
-        </div>
-
-        <AppsecEngineList items={data.appsecEngines} />
-        <ParserSourceList items={data.parserSources} />
-        <ScenarioList items={data.scenarios} />
-        <TimingList items={data.parserTimings} />
-        <LapiLatencyList items={data.lapiRoutes} />
-        <ParserNodeList items={data.parserNodes} showChildNodes={showChildParserNodes} onShowChildNodesChange={handleShowChildParserNodesChange} />
-        <WhitelistList items={data.whitelists} />
-      </div>
-      </MetricsSourcesContext.Provider>
-    );
-  }, [handleShowChildParserNodesChange, instances, load, requestedInstanceId, showChildParserNodes, state, t]);
-
-  const instanceScope = requestedInstanceId || (instances.length > 1 ? 'all' : instances[0]?.id);
-  const scopedInstances = instanceScope === 'all'
-    ? instances
-    : [instances.find((instance) => instance.id === instanceScope) || instances[0]].filter(Boolean) as InstanceSummary[];
-  const endpointChoices = scopedInstances.flatMap((instance) =>
-    instance.prometheus.map((endpoint) => ({ instance, endpoint })),
-  );
-  const selectedChoice = endpointChoices.find(({ instance, endpoint }) =>
-    endpoint.id === requestedEndpointId
-    && (instanceScope !== 'all' || instance.id === requestedMetricsInstanceId),
-  );
-  const showEndpointSelector = endpointChoices.length > 1;
-  const combinedSelected = showEndpointSelector
-    && (requestedEndpointId === COMBINED_ENDPOINT_ID || !selectedChoice);
+  const visibleParserNodes = data ? (showChildNodes ? data.parserNodes : data.parserNodes.filter((node) => !node.isChild)) : [];
 
   return (
-    <div className="space-y-6">
-      {showEndpointSelector && (
-        <div className="flex flex-wrap gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-          <div className="w-64 max-w-full">
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500" htmlFor="metrics-endpoint-selector">
-              {t('pages.metrics.metricsEndpoint')}
-            </label>
-            <DropdownSelect
-              id="metrics-endpoint-selector"
-              label={t('pages.metrics.metricsEndpoint')}
-              value={combinedSelected
-                ? COMBINED_ENDPOINT_ID
-                : `${selectedChoice!.instance.id}:${selectedChoice!.endpoint.id}`}
-              onChange={(value) => {
-                const next = new URLSearchParams(searchParams);
-                if (value === COMBINED_ENDPOINT_ID) {
-                  next.set('endpoint', COMBINED_ENDPOINT_ID);
-                  next.delete('metrics_instance');
-                  setSearchParams(next);
-                  return;
-                }
-                const choice = endpointChoices.find(({ instance, endpoint }) =>
-                  `${instance.id}:${endpoint.id}` === value,
-                );
-                if (!choice) return;
-                next.set('endpoint', choice.endpoint.id);
-                if (instanceScope === 'all') {
-                  next.set('metrics_instance', choice.instance.id);
-                } else {
-                  next.delete('metrics_instance');
-                }
-                setSearchParams(next);
-              }}
-              options={[
+    <>
+      <PageHeader
+        title={t('pages.metrics.title')}
+        description={t('pages.metrics.counterScope')}
+        meta={data && !disabled ? (
+          <>
+            {data.crowdsecVersion ? <span>{t('pages.metrics.version')}: <span className="font-mono">{data.crowdsecVersion}</span></span> : null}
+            {data.crowdsecStartedAt ? <span>{t('pages.metrics.startedAt', { time: formatDateTime(data.crowdsecStartedAt) })}</span> : null}
+            {data.totals.activeDecisions !== undefined ? (
+              <span className="numeric">{t('pages.metrics.activeDecisions', { count: formatNumber(data.totals.activeDecisions) })}</span>
+            ) : null}
+            {data.totals.alerts !== undefined ? <span className="numeric">{t('pages.metrics.alerts', { count: formatNumber(data.totals.alerts) })}</span> : null}
+            <span>{t('pages.metrics.scrapedAt', { time: formatDateTime(data.fetched_at) })}</span>
+          </>
+        ) : null}
+        actions={choices.length > 1 ? (
+          <Select
+            aria-label={t('pages.metrics.metricsEndpoint')}
+            className="max-w-full"
+            value={selection}
+            onValueChange={selectEndpoint}
+            renderValue={endpointOption}
+          >
+            {endpointOptions.map((option) => <Select.Option key={option.value} value={option.value}>{endpointOption(option.value)}</Select.Option>)}
+          </Select>
+        ) : null}
+      />
+
+      {disabled ? (
+        <Empty
+          title={t('pages.metrics.disabledTitle')}
+          contents={(
+            <p className="max-w-140 text-center text-balance text-kumo-subtle">
+              {t('pages.metrics.disabledPrefix')} <code className="font-mono text-sm">CONFIG_INSTANCE_METRICS_URL</code>{' '}
+              {t('pages.metrics.disabledMiddle')} <code className="font-mono text-sm">full</code> {t('pages.metrics.disabledSuffix')}
+            </p>
+          )}
+        />
+      ) : metrics.error ? (
+        <Empty
+          icon={<WarningCircleIcon size={32} className="text-kumo-danger" />}
+          title={t('pages.metrics.unavailableTitle')}
+          description={toErrorInfo(metrics.error, t('pages.metrics.fetchFailed')).message}
+          contents={<Button loading={metrics.busy} onClick={metrics.reload}>{t('pages.metrics.retry')}</Button>}
+          className="break-words"
+        />
+      ) : !data ? (
+        <div className="flex flex-1 items-center justify-center p-8 text-kumo-subtle">
+          <Loader size={20} />
+        </div>
+      ) : (
+        <div className={cn('flex flex-col gap-6 transition-opacity', metrics.busy && 'opacity-80')}>
+          {aggregation?.partial ? (
+            <Banner
+              variant="alert"
+              icon={<WarningCircleIcon weight="fill" />}
+              description={t('pages.metrics.partialWarning', {
+                sources: aggregation.sources.filter((source) => source.status === 'unavailable').map((source) => sourceLabels.get(source.id)).join(', '),
+              })}
+            />
+          ) : null}
+
+          {aggregation ? (
+            <MetricsSection
+              title={t('pages.metrics.combinedSources')}
+              rows={aggregation.sources}
+              rowKey={(source) => source.id}
+              emptyMessage={t('common.noDataAvailable')}
+              columns={[
+                { header: t('pages.metrics.metricsEndpoint'), className: 'max-w-72', cell: (source) => sourceCells.get(source.id) },
                 {
-                  value: COMBINED_ENDPOINT_ID,
-                  label: t('pages.metrics.combined'),
-                  icon: <Blend className="h-4 w-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />,
+                  header: t('pages.metrics.columns.status'),
+                  cell: (source) => (
+                    <Badge variant={source.status === 'available' ? 'success' : 'warning'}>
+                      {t(source.status === 'available' ? 'pages.metrics.sourceAvailable' : 'pages.metrics.sourceUnavailable')}
+                    </Badge>
+                  ),
                 },
-                ...endpointChoices.map(({ instance, endpoint }, choiceIndex) => ({
-                  value: `${instance.id}:${endpoint.id}`,
-                  label: instanceScope === 'all' ? `${instance.name} — ${endpoint.name}` : endpoint.name,
-                  icon: <InstanceIcon
-                    icon={endpoint.icon || (instanceScope === 'all' ? instance.icon : undefined)}
-                    colorIndex={instanceScope === 'all'
-                      ? instances.findIndex((candidate) => candidate.id === instance.id)
-                      : choiceIndex}
-                  />,
-                })),
+                {
+                  header: t('pages.metrics.version'),
+                  cell: (source) => source.status === 'available'
+                    ? <span className="font-mono text-sm">{source.crowdsecVersion || EMPTY_CELL}</span>
+                    : <span className="text-sm whitespace-normal text-kumo-warning">{source.error}</span>,
+                },
+                { header: t('pages.metrics.started'), cell: (source) => (source.crowdsecStartedAt ? formatDateTime(source.crowdsecStartedAt) : <Muted />) },
               ]}
             />
-          </div>
+          ) : null}
+
+          <LayerCard className="grid grid-cols-2 gap-px bg-kumo-hairline lg:grid-cols-3">
+            {[
+              {
+                label: t('pages.metrics.remediationComponentApiRequests'),
+                value: formatNumber(data.totals.bouncerRequests),
+                footer: t('pages.metrics.groupedByBouncer'),
+              },
+              {
+                label: t('pages.metrics.machineAlertPosts'),
+                value: formatNumber(data.totals.machineAlertRequests ?? 0),
+                footer: t('pages.metrics.machineAlertPostsDetail', {
+                  calls: formatNumber(data.totals.machineRequests),
+                  heartbeats: formatNumber(data.totals.machineHeartbeatRequests ?? 0),
+                }),
+              },
+              {
+                label: t('pages.metrics.appsecRequests'),
+                value: formatNumber(data.totals.appsecRequests),
+                footer: t('pages.metrics.blockedCount', { count: formatNumber(data.totals.appsecBlocked) }),
+              },
+              {
+                label: t('pages.metrics.whitelistHits'),
+                value: formatNumber(data.totals.whitelistHits),
+                footer: t('pages.metrics.whitelistedCount', { count: formatNumber(data.totals.whitelisted) }),
+              },
+              {
+                label: t('pages.metrics.parserEvents'),
+                value: formatNumber(data.totals.parserProcessed),
+                footer: t('pages.metrics.unparsedCount', { count: formatNumber(data.totals.parserKo) }),
+              },
+              {
+                label: t('pages.metrics.parsedSuccessfully'),
+                value: data.totals.parserSuccessRate === null ? t('pages.metrics.notAvailable') : formatPercent(data.totals.parserSuccessRate),
+                footer: t('pages.metrics.averageDuration', {
+                  duration: data.totals.parserAverageSeconds === null ? t('pages.metrics.notAvailable') : formatDuration(data.totals.parserAverageSeconds),
+                }),
+              },
+            ].map((figure) => (
+              <div key={figure.label} className="flex min-w-0 flex-col gap-1 bg-kumo-base p-4">
+                <span className="text-sm text-kumo-subtle">{figure.label}</span>
+                <span className="text-2xl leading-tight font-semibold text-kumo-default numeric">{figure.value}</span>
+                <span className="text-xs text-kumo-subtle numeric sm:text-sm">{figure.footer}</span>
+              </div>
+            ))}
+          </LayerCard>
+
+          <MetricsSection
+            title={t('pages.metrics.remediationComponents')}
+            description={t('pages.metrics.bouncersDescription')}
+            footer={t('pages.metrics.remediationMetricsNote')}
+            rows={data.bouncers}
+            rowKey={(bouncer) => `${bouncer.source_id}|${bouncer.name}`}
+            source={sourceOf}
+            emptyMessage={t('pages.metrics.emptyBouncers')}
+            columns={[
+              { header: t('common.name'), className: 'max-w-56', cell: (bouncer) => <TextCell value={bouncer.name} /> },
+              {
+                header: t('pages.metrics.columns.mode'),
+                cell: (bouncer) => {
+                  const mode = bouncer.mode ?? 'unknown';
+                  return <Badge variant={BOUNCER_MODE_VARIANTS[mode]}>{t(`pages.metrics.modes.${mode}`)}</Badge>;
+                },
+              },
+              { header: t('pages.metrics.columns.requests'), numeric: true, cell: (bouncer) => formatNumber(bouncer.requests) },
+              {
+                header: <HeaderHint label={t('pages.metrics.columns.decisionResponses')} hint={t('pages.metrics.streamModeDescription')} />,
+                cell: (bouncer) => {
+                  const nonEmpty = bouncer.decisionsOk ?? 0;
+                  const empty = bouncer.decisionsKo ?? 0;
+                  if (bouncer.mode === 'stream' || empty + nonEmpty === 0) return <Muted />;
+                  return (
+                    <span className="inline-flex items-center gap-2">
+                      <SplitBar healthy={empty / (empty + nonEmpty)} />
+                      <span className="text-sm text-kumo-subtle numeric">
+                        {t('pages.metrics.labels.empty', { count: formatNumber(empty) })} · {t('pages.metrics.labels.nonEmpty', { count: formatNumber(nonEmpty) })}
+                      </span>
+                    </span>
+                  );
+                },
+              },
+              { header: t('pages.metrics.columns.routes'), cell: (bouncer) => <RouteList routes={bouncer.routes} /> },
+            ]}
+          />
+
+          <MetricsSection
+            title={t('pages.metrics.logProcessors')}
+            description={t('pages.metrics.machinesDescription')}
+            rows={data.machines}
+            rowKey={(machine) => `${machine.source_id}|${machine.name}`}
+            source={sourceOf}
+            emptyMessage={t('pages.metrics.emptyMachines')}
+            columns={[
+              { header: t('common.name'), className: 'max-w-56', cell: (machine) => <TextCell value={machine.name} /> },
+              {
+                header: t('pages.metrics.columns.heartbeat'),
+                cell: (machine) => {
+                  const status = heartbeat(machine.lastHeartbeatAt, machine.heartbeatRequests ?? 0);
+                  return <span title={status.title}><Badge variant={status.variant}>{status.label}</Badge></span>;
+                },
+              },
+              { header: t('pages.metrics.columns.alertPosts'), numeric: true, cell: (machine) => formatNumber(machine.alertRequests ?? 0) },
+              { header: t('pages.metrics.columns.heartbeats'), numeric: true, cell: (machine) => formatNumber(machine.heartbeatRequests ?? 0) },
+              { header: t('pages.metrics.columns.otherApi'), numeric: true, cell: (machine) => formatNumber(machine.otherRequests ?? 0) },
+              { header: t('pages.metrics.columns.routes'), cell: (machine) => <RouteList routes={machine.routes} /> },
+            ]}
+          />
+
+          <MetricsSection
+            title={t('pages.metrics.appsecEngines')}
+            description={t('pages.metrics.appsecEnginesDescription')}
+            rows={data.appsecEngines ?? []}
+            rowKey={(engine) => `${engine.source_id}|${engine.engine}|${engine.source}`}
+            source={sourceOf}
+            emptyMessage={t('pages.metrics.emptyAppsecEngines')}
+            columns={[
+              { header: t('pages.metrics.columns.engine'), className: 'max-w-64', cell: (engine) => <NameCell name={engine.engine} detail={engine.source} /> },
+              { header: t('pages.metrics.columns.requests'), numeric: true, cell: (engine) => formatNumber(engine.requests) },
+              { header: t('pages.metrics.columns.allowed'), numeric: true, cell: (engine) => formatNumber(Math.max(engine.requests - engine.blocked, 0)) },
+              { header: t('pages.metrics.columns.blocked'), numeric: true, cell: (engine) => formatNumber(engine.blocked) },
+              {
+                header: <HeaderHint label={t('pages.metrics.columns.blockRate')} hint={t('pages.metrics.appsecBlockRateTooltip')} />,
+                cell: (engine) => engine.blockRate === null ? <Muted /> : (
+                  <span className="inline-flex items-center gap-2">
+                    <SplitBar healthy={1 - engine.blockRate} />
+                    <Badge variant={engine.blocked > 0 ? 'warning' : 'secondary'}>{formatPercent(engine.blockRate)}</Badge>
+                  </span>
+                ),
+              },
+            ]}
+          />
+
+          <MetricsSection
+            title={t('pages.metrics.parserSources')}
+            description={t('pages.metrics.parserSourcesDescription')}
+            rows={data.parserSources}
+            rowKey={(source) => `${source.source_id}|${source.source}|${source.type}`}
+            source={sourceOf}
+            emptyMessage={t('pages.metrics.emptyParserSources')}
+            columns={[
+              {
+                header: t('pages.metrics.columns.datasource'),
+                className: 'max-w-72',
+                cell: (source) => <NameCell name={source.source} detail={[source.type, ...source.acquisTypes].join(' / ')} />,
+              },
+              { header: t('pages.metrics.columns.read'), numeric: true, cell: (source) => (source.linesRead === null ? <Muted /> : formatNumber(source.linesRead)) },
+              { header: t('pages.metrics.columns.parsed'), numeric: true, cell: (source) => formatNumber(source.parsedOk) },
+              { header: t('pages.metrics.columns.unparsed'), numeric: true, cell: (source) => formatNumber(source.parsedKo) },
+              { header: t('pages.metrics.columns.poured'), numeric: true, cell: (source) => formatNumber(source.pouredToBucket) },
+              { header: t('pages.metrics.columns.whitelisted'), numeric: true, cell: (source) => formatNumber(source.whitelisted) },
+              {
+                header: <HeaderHint label={t('pages.metrics.columns.success')} hint={t('pages.metrics.parserSuccessTooltip')} />,
+                cell: (source) => <SuccessRate value={source.successRate} />,
+              },
+            ]}
+          />
+
+          <MetricsSection
+            title={t('pages.metrics.scenarios')}
+            description={t('pages.metrics.scenariosDescription')}
+            rows={data.scenarios ?? []}
+            rowKey={(scenario) => `${scenario.source_id}|${scenario.name}`}
+            source={sourceOf}
+            emptyMessage={t('pages.metrics.emptyScenarios')}
+            columns={[
+              { header: t('pages.metrics.columns.scenario'), className: 'max-w-72', cell: (scenario) => <ScenarioName name={scenario.name} /> },
+              { header: t('pages.metrics.columns.current'), numeric: true, cell: (scenario) => formatNumber(scenario.current) },
+              { header: t('pages.metrics.columns.instantiated'), numeric: true, cell: (scenario) => formatNumber(scenario.instantiations) },
+              {
+                header: t('pages.metrics.columns.overflowed'),
+                numeric: true,
+                cell: (scenario) => <span className={cn(scenario.overflows > 0 && 'text-kumo-warning')}>{formatNumber(scenario.overflows)}</span>,
+              },
+              { header: t('pages.metrics.columns.poured'), numeric: true, cell: (scenario) => formatNumber(scenario.poured) },
+              { header: t('pages.metrics.columns.expired'), numeric: true, cell: (scenario) => formatNumber(scenario.underflows) },
+              { header: t('pages.metrics.columns.canceled'), numeric: true, cell: (scenario) => formatNumber(scenario.canceled) },
+            ]}
+          />
+
+          <MetricsSection
+            title={t('pages.metrics.parserTiming')}
+            description={t('pages.metrics.parserTimingDescription')}
+            rows={data.parserTimings}
+            rowKey={(timing) => `${timing.source_id}|${timing.source}|${timing.type}`}
+            source={sourceOf}
+            emptyMessage={t('pages.metrics.emptyParserTiming')}
+            columns={[
+              { header: t('pages.metrics.columns.datasource'), className: 'max-w-72', cell: (timing) => <NameCell name={timing.source} detail={timing.type} /> },
+              { header: t('pages.metrics.columns.timedEvents'), numeric: true, cell: (timing) => formatNumber(timing.count) },
+              {
+                header: <HeaderHint label={t('pages.metrics.columns.average')} hint={t('pages.metrics.parserTimingTooltip')} />,
+                numeric: true,
+                cell: (timing) => <Duration seconds={timing.averageSeconds} warnAbove={0.001} />,
+              },
+            ]}
+          />
+
+          <MetricsSection
+            title={t('pages.metrics.lapiLatency')}
+            description={t('pages.metrics.lapiLatencyDescription')}
+            rows={data.lapiRoutes ?? []}
+            rowKey={(route) => `${route.source_id}|${route.method} ${route.route}`}
+            source={sourceOf}
+            emptyMessage={t('pages.metrics.emptyLapiLatency')}
+            columns={[
+              { header: t('pages.metrics.columns.method'), cell: (route) => <span className="font-mono text-sm font-medium">{route.method}</span> },
+              { header: t('pages.metrics.columns.route'), className: 'max-w-80', cell: (route) => <TextCell value={route.route} mono /> },
+              { header: t('pages.metrics.columns.requests'), numeric: true, cell: (route) => formatNumber(route.requests) },
+              { header: t('pages.metrics.columns.average'), numeric: true, cell: (route) => <Duration seconds={route.averageSeconds} warnAbove={0.25} /> },
+            ]}
+          />
+
+          <MetricsSection
+            title={t('pages.metrics.parserNodes')}
+            description={t('pages.metrics.parserNodesDescription')}
+            action={data.parserNodes.length > 0 ? (
+              <Switch size="sm" label={t('pages.metrics.showChildParserNodes')} checked={showChildNodes} onCheckedChange={changeShowChildNodes} />
+            ) : null}
+            rows={visibleParserNodes}
+            rowKey={(node) => `${node.source_id}|${node.name}|${node.stage}|${node.source}|${node.acquisType ?? ''}`}
+            source={sourceOf}
+            emptyMessage={data.parserNodes.length === 0 ? t('pages.metrics.emptyParserNodes') : t('pages.metrics.emptyParserNodesAfterFilter')}
+            columns={[
+              { header: t('pages.metrics.columns.node'), className: 'max-w-72', cell: (node) => <NameCell name={node.name} detail={`${node.type} / ${node.source}`} /> },
+              { header: t('pages.metrics.columns.stage'), cell: (node) => node.stage },
+              { header: t('pages.metrics.columns.processed'), numeric: true, cell: (node) => formatNumber(node.processed) },
+              { header: t('pages.metrics.columns.success'), cell: (node) => <SuccessRate value={node.successRate} /> },
+            ]}
+          />
+
+          {data.whitelists.length > 0 ? (
+            <MetricsSection
+              title={t('pages.metrics.whitelists')}
+              description={t('pages.metrics.whitelistsDescription')}
+              rows={data.whitelists}
+              rowKey={(whitelist) => `${whitelist.source_id}|${whitelist.name}|${whitelist.reason}`}
+              source={sourceOf}
+              emptyMessage={t('common.noDataAvailable')}
+              columns={[
+                { header: t('pages.metrics.columns.whitelist'), className: 'max-w-72', cell: (whitelist) => <TextCell value={whitelist.name} /> },
+                { header: t('pages.metrics.columns.reason'), className: 'max-w-80', cell: (whitelist) => <TextCell value={whitelist.reason} /> },
+                { header: t('pages.metrics.columns.hits'), numeric: true, cell: (whitelist) => formatNumber(whitelist.hits) },
+                { header: t('pages.metrics.columns.whitelisted'), numeric: true, cell: (whitelist) => formatNumber(whitelist.whitelisted) },
+              ]}
+            />
+          ) : null}
         </div>
       )}
-      {content}
-    </div>
+    </>
   );
 }

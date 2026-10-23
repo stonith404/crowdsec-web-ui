@@ -1,3 +1,4 @@
+import { useCallback, useState } from 'react';
 import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from '../../../shared/contracts';
 import type { TableColumnId, TableColumnPreferenceTable, TableColumnPreferences } from '../types';
 
@@ -187,4 +188,20 @@ function mergeColumnOrder(table: TableColumnPreferenceTable, visibleColumns: Tab
     }
 
     return [...orderedVisibleColumns, ...hiddenColumns];
+}
+
+/** The columns a table shows and their order, which the browser remembers */
+export function useTableColumns(table: TableColumnPreferenceTable) {
+    const [visible, setVisible] = useState(() => loadStoredTableColumnPreferences()[table]);
+    const [order, setOrder] = useState(() => loadStoredTableColumnOrders(table, visible));
+
+    const update = useCallback((nextOrder: TableColumnId[], nextVisible: TableColumnId[]) => {
+        const orderedVisible = orderVisibleTableColumns(nextOrder, nextVisible);
+        setOrder(nextOrder);
+        setVisible(orderedVisible);
+        saveStoredTableColumnOrders(table, nextOrder);
+        saveStoredTableColumnPreferences({ ...loadStoredTableColumnPreferences(), [table]: orderedVisible });
+    }, [table]);
+
+    return { order, visible, visibleOrdered: orderVisibleTableColumns(order, visible), update };
 }

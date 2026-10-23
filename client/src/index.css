@@ -1,78 +1,120 @@
-@import 'flag-icons/css/flag-icons.min.css';
+/* Kumo's components ship their classes in compiled JavaScript, which Tailwind only scans when pointed at it */
+@source "../../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
+@import "@cloudflare/kumo/styles";
 @import "tailwindcss";
-@config "../tailwind.config.js";
+@import "flag-icons/css/flag-icons.min.css";
 
-/* Accent palette as CSS variables so branding can override it at runtime (see shared/branding-theme.ts). */
+@custom-variant dark (&:where([data-mode="dark"], [data-mode="dark"] *));
+
+/* The server overrides these two scales from the branding settings (shared/branding-theme.ts), so Kumo's brand and neutral tokens are mapped onto them below */
+/* Keep the accent scale in sync with DEFAULT_ACCENT_SCALE and the gray scale with the `neutral` preset */
 @theme {
-  --color-primary-50: #f0f9ff;
-  --color-primary-100: #e0f2fe;
-  --color-primary-200: #bae6fd;
-  --color-primary-300: #7dd3fc;
-  --color-primary-400: #38bdf8;
-  --color-primary-500: #0ea5e9;
-  --color-primary-600: #0284c7;
-  --color-primary-700: #0369a1;
-  --color-primary-800: #075985;
-  --color-primary-900: #0c4a6e;
-  --color-primary-950: #082f49;
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+
+  --color-primary-50: #f3f8ff;
+  --color-primary-100: #e6f0ff;
+  --color-primary-200: #cce0ff;
+  --color-primary-300: #a6c8ff;
+  --color-primary-400: #7badff;
+  --color-primary-500: #5997ff;
+  --color-primary-600: #056dff;
+  --color-primary-700: #0859d1;
+  --color-primary-800: #114dab;
+  --color-primary-900: #12408c;
+  --color-primary-950: #0b295b;
+
+  --color-gray-50: oklch(98.5% 0 0);
+  --color-gray-100: oklch(97% 0 0);
+  --color-gray-200: oklch(92.2% 0 0);
+  --color-gray-300: oklch(87% 0 0);
+  --color-gray-400: oklch(70.8% 0 0);
+  --color-gray-500: oklch(55.6% 0 0);
+  --color-gray-600: oklch(43.9% 0 0);
+  --color-gray-700: oklch(37.1% 0 0);
+  --color-gray-800: oklch(26.9% 0 0);
+  --color-gray-900: oklch(20.5% 0 0);
+  --color-gray-950: oklch(14.5% 0 0);
+}
+
+/* Kumo derives its surfaces from Tailwind's neutral scale and a few in-between steps, which all follow the branded gray scale here */
+/* The branding settings preview sets other scales on a [data-theme="kumo"] wrapper, which needs the mapping again to pick them up */
+:root,
+[data-theme="kumo"] {
+  --color-neutral-50: var(--color-gray-50);
+  --color-neutral-100: var(--color-gray-100);
+  --color-neutral-200: var(--color-gray-200);
+  --color-neutral-300: var(--color-gray-300);
+  --color-neutral-400: var(--color-gray-400);
+  --color-neutral-500: var(--color-gray-500);
+  --color-neutral-600: var(--color-gray-600);
+  --color-neutral-700: var(--color-gray-700);
+  --color-neutral-800: var(--color-gray-800);
+  --color-neutral-900: var(--color-gray-900);
+  --color-neutral-950: var(--color-gray-950);
+  --color-kumo-neutral-25: color-mix(in oklab, var(--color-gray-50) 60%, white);
+  --color-kumo-neutral-50: color-mix(in oklab, var(--color-gray-50) 80%, white);
+  --color-kumo-neutral-75: color-mix(in oklab, var(--color-gray-50) 70%, var(--color-gray-100));
+  --color-kumo-neutral-125: color-mix(in oklab, var(--color-gray-100) 90%, var(--color-gray-200));
+  --color-kumo-neutral-150: color-mix(in oklab, var(--color-gray-100) 70%, var(--color-gray-200));
+  --color-kumo-neutral-450: color-mix(in oklab, var(--color-gray-200) 40%, var(--color-gray-300));
+  --color-kumo-neutral-750: color-mix(in oklab, var(--color-gray-700) 50%, var(--color-gray-800));
+  --color-kumo-neutral-850: color-mix(in oklab, var(--color-gray-800) 70%, var(--color-gray-900));
+  --color-kumo-neutral-925: color-mix(in oklab, var(--color-gray-900) 50%, var(--color-gray-950));
+  --color-kumo-neutral-950: var(--color-gray-950);
+  --color-kumo-neutral-975: color-mix(in oklab, var(--color-gray-950) 80%, black);
+  --color-kumo-neutral-1000: color-mix(in oklab, var(--color-gray-950) 70%, black);
+
+  --color-kumo-brand: var(--color-primary-600);
+  --color-kumo-brand-hover: var(--color-primary-700);
+  --text-color-kumo-link: var(--color-primary-700);
+  --text-color-kumo-info: var(--color-primary-700);
+}
+
+:root[data-mode="dark"],
+[data-theme="kumo"][data-mode="dark"] {
+  --color-kumo-brand: color-mix(in oklch, var(--color-primary-600), black 10%);
+  --color-kumo-brand-hover: var(--color-primary-700);
+  --text-color-kumo-link: var(--color-primary-400);
+  --text-color-kumo-info: var(--color-primary-400);
 }
 
 @layer base {
-  :root {
+  /* Kumo only switches the color scheme to dark, so a light preview inside the dark page needs it switched back */
+  [data-mode="light"] {
     color-scheme: light;
   }
 
-  :root.dark {
-    color-scheme: dark;
+  /* Inter set slightly tighter with its more legible alternates for 1, 3, 4 and 6, as on the Kumo docs */
+  html {
+    font-family: var(--font-sans);
+    letter-spacing: -0.01em;
+    font-feature-settings: "cv02", "cv03", "cv04", "calt";
+    -webkit-font-smoothing: antialiased;
   }
 
   body {
-    @apply bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 antialiased;
+    @apply bg-kumo-canvas text-base text-kumo-default;
+  }
+
+  pre,
+  code,
+  kbd,
+  .font-mono {
+    letter-spacing: normal;
+  }
+
+  /* Kumo's Table aligns with `text-left`, which browsers don't pass on to header cells and which is wrong in right-to-left languages */
+  th,
+  td {
+    text-align: start;
   }
 }
 
-@layer utilities {
-  /* Recharts focus suppression moved to global scope */
-}
-
-/* Global override to ensure Recharts focus outline is removed */
-/* Global override to ensure Recharts focus outline is removed */
-.recharts-wrapper,
-.recharts-surface,
-.recharts-surface :focus,
-.recharts-tooltip-wrapper {
-  outline: none !important;
-  outline-offset: 0 !important;
-  box-shadow: none !important;
-}
-
-/* Target specifically the SVG and groups which might receive focus */
-svg.recharts-surface:focus,
-g:focus,
-path:focus {
-  outline: none !important;
+/* Numbers in tables and figures line up when they use tabular digits */
+@utility numeric {
+  font-variant-numeric: tabular-nums;
 }
 
 .sortable-ghost {
   @apply opacity-40;
-}
-
-.sortable-chosen {
-  @apply bg-primary-50 dark:bg-primary-900/20;
-}
-
-.toast-enter {
-  animation: toast-enter 180ms ease-out;
-}
-
-@keyframes toast-enter {
-  from {
-    opacity: 0;
-    transform: translateY(0.5rem);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }

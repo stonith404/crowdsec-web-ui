@@ -14,17 +14,12 @@ import {
   deleteAlert,
   deleteDecision,
   fetchAlert,
-  fetchAlerts,
   fetchAlertsPaginated,
-  fetchAlertsForStats,
   fetchConfig,
   fetchCombinedCrowdsecMetrics,
   fetchCrowdsecMetrics,
   fetchDashboardStats,
-  fetchDecisions,
   fetchDecisionsPaginated,
-  fetchDecisionsForStats,
-  fetchNotifications,
   fetchNotificationsPaginated,
   fetchNotificationSettings,
   markNotificationRead,
@@ -64,15 +59,10 @@ describe('api helpers', () => {
       }),
     );
 
-    await expect(fetchAlerts()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchAlert(1)).resolves.toEqual({ id: 1 });
-    await expect(fetchDecisions()).resolves.toEqual([{ id: 1 }]);
-    await expect(fetchAlertsForStats()).resolves.toEqual([{ id: 1 }]);
-    await expect(fetchDecisionsForStats()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchDashboardStats({ simulation: 'live' })).resolves.toEqual([{ id: 1 }]);
     await expect(fetchConfig()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchNotificationSettings()).resolves.toEqual([{ id: 1 }]);
-    await expect(fetchNotifications()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
     await expect(fetchNotificationsPaginated()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
     expect(String(vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/api/alerts/1'))?.[0])).toContain('include_decisions=false');
   });
@@ -306,7 +296,7 @@ describe('api helpers', () => {
 
     await expect(deleteAlert(1)).resolves.toBeNull();
     await expect(deleteDecision(1)).resolves.toBeNull();
-    await expect(fetchAlerts()).rejects.toThrow('Failed to fetch alerts');
+    await expect(fetchAlertsPaginated(1)).rejects.toThrow('Failed to fetch alerts');
   });
 
   test('returns JSON payloads for successful mutations', async () => {
