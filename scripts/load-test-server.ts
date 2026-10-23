@@ -130,7 +130,13 @@ const loadTestPrometheusMetrics = `
 # HELP cs_info Information about CrowdSec
 cs_info{version="v1.7.8-63227459"} 1
 process_start_time_seconds 1787773549.790
-cs_active_decisions{reason="ssh-bf",origin="crowdsecurity",action="ban"} 22760
+cs_active_decisions{reason="crowdsecurity/http-probing",origin="CAPI",action="ban"} 9120
+cs_active_decisions{reason="crowdsecurity/ssh-bf",origin="CAPI",action="ban"} 7410
+cs_active_decisions{reason="crowdsecurity/http-cve",origin="CAPI",action="ban"} 3980
+cs_active_decisions{reason="firehol_cruzit_web_attacks",origin="lists",action="ban"} 1460
+cs_active_decisions{reason="tor-exit-nodes",origin="lists",action="ban"} 610
+cs_active_decisions{reason="crowdsecurity/ssh-bf",origin="crowdsec",action="ban"} 152
+cs_active_decisions{reason="manual/web-ui",origin="cscli",action="ban"} 28
 cs_alerts{reason="ssh-bf"} 1664
 cs_lapi_bouncer_requests_total{bouncer="firewall",route="/v1/decisions/stream",method="GET"} 9176
 cs_lapi_bouncer_requests_total{bouncer="traefik",route="/v1/decisions",method="GET"} 734

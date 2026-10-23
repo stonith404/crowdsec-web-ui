@@ -681,6 +681,14 @@ export interface CrowdsecMetricsTiming {
   averageSeconds: number | null;
 }
 
+export interface CrowdsecMetricsActiveDecisions {
+  /** Where the decisions come from, such as `CAPI` for the community blocklist or `lists` for subscribed blocklists */
+  origin: string;
+  /** The decisions' scenario, which is the blocklist's name for `lists` */
+  reason: string;
+  count: number;
+}
+
 export interface CrowdsecMetricsWhitelist {
   source_id?: string;
   name: string;
@@ -764,6 +772,7 @@ export interface CrowdsecMetricsResponse {
   parserSources: CrowdsecMetricsParserSource[];
   parserNodes: CrowdsecMetricsParserNode[];
   whitelists: CrowdsecMetricsWhitelist[];
+  activeDecisionsByOrigin: CrowdsecMetricsActiveDecisions[];
   scenarios?: CrowdsecMetricsScenario[];
   parserTimings: CrowdsecMetricsTiming[];
   lapiRoutes?: CrowdsecMetricsLapiRoute[];
