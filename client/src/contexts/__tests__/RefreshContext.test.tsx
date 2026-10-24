@@ -149,7 +149,7 @@ describe('RefreshContext', () => {
       releaseRefresh = resolve;
     }));
     vi.stubGlobal('fetch', fetchSpy);
-    const completedConfig = makeConfig({
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({
       sync_status: {
         isSyncing: false,
         progress: 100,
@@ -180,8 +180,7 @@ describe('RefreshContext', () => {
           },
         ],
       },
-    });
-    vi.mocked(fetchConfig).mockResolvedValue(completedConfig);
+    }));
 
     render(
       <RefreshProvider>
@@ -190,8 +189,6 @@ describe('RefreshContext', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('manual-sync')).toHaveTextContent('done'));
-    // Hold polls while the refresh runs, so a slow run cannot have one replace the status set by the click.
-    vi.mocked(fetchConfig).mockImplementation(() => new Promise(() => undefined));
     await userEvent.click(screen.getByRole('button', { name: 'full-refresh' }));
     expect(screen.getByTestId('manual-sync')).toHaveTextContent('Starting historical data sync...');
     expect(screen.getByTestId('manual-instances')).toHaveTextContent('primary:syncing:0|secondary:idle:0');
@@ -202,7 +199,6 @@ describe('RefreshContext', () => {
 
     const release = releaseRefresh as unknown;
     if (typeof release !== 'function') throw new Error('Refresh request was not held');
-    vi.mocked(fetchConfig).mockResolvedValue(completedConfig);
     release(Response.json({ success: true }));
     await waitFor(() => expect(screen.getByTestId('manual-sync')).toHaveTextContent('done'));
   });

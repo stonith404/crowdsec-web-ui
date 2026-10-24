@@ -46,7 +46,7 @@ const packages: PackageRule[] = [
     exactFiles: [
       'client/src/lib/basePath.ts',
       'client/src/lib/utils.ts',
-      'client/src/lib/stats.ts',
+      'client/src/lib/deleteResults.ts',
     ],
   },
 ];

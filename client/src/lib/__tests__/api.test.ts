@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   addDecision,
-  addDecisions,
-  checkAllowlist,
   bulkDeleteAlerts,
   bulkDeleteNotifications,
   bulkDeleteDecisions,
@@ -16,21 +14,12 @@ import {
   deleteAlert,
   deleteDecision,
   fetchAlert,
-  fetchAlerts,
   fetchAlertsPaginated,
-  fetchAlertSessionsPaginated,
-  fetchAlertsForStats,
-  fetchAllowlistEntries,
-  fetchAllowlists,
   fetchConfig,
   fetchCombinedCrowdsecMetrics,
   fetchCrowdsecMetrics,
   fetchDashboardStats,
-  fetchDecisions,
   fetchDecisionsPaginated,
-  fetchDecisionsForStats,
-  fetchFacet,
-  fetchNotifications,
   fetchNotificationsPaginated,
   fetchNotificationSettings,
   markNotificationRead,
@@ -70,31 +59,12 @@ describe('api helpers', () => {
       }),
     );
 
-    await expect(fetchAlerts()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchAlert(1)).resolves.toEqual({ id: 1 });
-    await expect(fetchDecisions()).resolves.toEqual([{ id: 1 }]);
-    await expect(fetchAlertsForStats()).resolves.toEqual([{ id: 1 }]);
-    await expect(fetchDecisionsForStats()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchDashboardStats({ simulation: 'live' })).resolves.toEqual([{ id: 1 }]);
     await expect(fetchConfig()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchNotificationSettings()).resolves.toEqual([{ id: 1 }]);
-    await expect(fetchNotifications()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
     await expect(fetchNotificationsPaginated()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
     expect(String(vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/api/alerts/1'))?.[0])).toContain('include_decisions=false');
-  });
-
-  test('requests alert sessions with only populated filters', async () => {
-    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: Parameters<typeof fetch>[1]) =>
-      Response.json({ data: [] }),
-    );
-    mockFetch(fetchMock);
-
-    await fetchAlertSessionsPaginated(2, 25, { scenario: 'ssh', country: '' });
-    await fetchAlertSessionsPaginated(1);
-
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/alerts/sessions?page=2&page_size=25&scenario=ssh');
-    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('country=');
-    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/alerts/sessions?page=1&page_size=50');
   });
 
   test('paginated helpers include only populated filters', async () => {
@@ -114,53 +84,6 @@ describe('api helpers', () => {
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/decisions?page=3&page_size=10&ip=1.2.3.4');
     expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain('target=');
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain('/api/notifications?page=4&page_size=20');
-  });
-
-  test('facet requests use default pagination and omit empty search options', async () => {
-    const payload = { field: 'scenario', values: [], offset: 0, has_more: false };
-    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: RequestInit) => Response.json(payload));
-    mockFetch(fetchMock);
-
-    await expect(fetchFacet('alerts', 'scenario')).resolves.toEqual(payload);
-    await expect(fetchFacet('decisions', 'scenario', {}, { search: '', searchValues: [] })).resolves.toEqual(payload);
-
-    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
-      '/api/alerts/facets?field=scenario&offset=0&limit=10',
-      '/api/decisions/facets?field=scenario&offset=0&limit=10',
-    ]);
-  });
-
-  test('facet requests encode search values, populated filters and pagination, and forward cancellation', async () => {
-    const signal = new AbortController().signal;
-    const payload = { field: 'scenario', values: [{ value: 'crowdsecurity/ssh-bf', count: 3 }], offset: 20, has_more: true };
-    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: RequestInit) => Response.json(payload));
-    mockFetch(fetchMock);
-
-    await expect(fetchFacet('alerts', 'scenario', { country: 'DE', target: '' }, {
-      search: 'ssh & http',
-      searchValues: ['crowdsecurity/ssh-bf', 'custom/http'],
-      offset: 20,
-      limit: 25,
-      signal,
-    })).resolves.toEqual(payload);
-
-    const url = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://localhost');
-    expect(Object.fromEntries(url.searchParams)).toEqual({
-      field: 'scenario',
-      offset: '20',
-      limit: '25',
-      search: 'ssh & http',
-      search_values: JSON.stringify(['crowdsecurity/ssh-bf', 'custom/http']),
-      country: 'DE',
-    });
-    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(signal);
-  });
-
-  test('facet requests report failures for the requested page', async () => {
-    mockFetch(vi.fn(async () => new Response(null, { status: 500 })));
-
-    await expect(fetchFacet('alerts', 'scenario')).rejects.toThrow('Failed to fetch alerts facets');
-    await expect(fetchFacet('decisions', 'scenario')).rejects.toThrow('Failed to fetch decisions facets');
   });
 
   test('uses instance-aware resource paths and bulk reference payloads', async () => {
@@ -238,61 +161,6 @@ describe('api helpers', () => {
     mockFetch(vi.fn(async () => Response.json(payload, { status: 502 })));
 
     await expect(addDecision({ ip: '1.2.3.4' })).resolves.toEqual(payload);
-  });
-
-  test.each([200, 502])('bulk add returns per-instance outcomes for HTTP %i', async (status) => {
-    const payload = {
-      results: [{ instance_id: 'offline', instance_name: 'Offline', success: false, error: 'unreachable' }],
-      succeeded: 0,
-      failed: 1,
-      added: [],
-      allowlisted: [],
-    };
-    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: RequestInit) => Response.json(payload, { status }));
-    mockFetch(fetchMock);
-    const request = { values: ['1.2.3.4', '10.0.0.0/24'], duration: '4h', bypass_allowlist: true };
-
-    await expect(addDecisions(request)).resolves.toEqual(payload);
-    expect(fetchMock).toHaveBeenCalledWith('/api/decisions/bulk-add', expect.objectContaining({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    }));
-  });
-
-  test.each([
-    ['invalid JSON', 'not-json'],
-    ['null', 'null'],
-    ['a primitive', '"unavailable"'],
-    ['missing results', '{"error":"unavailable"}'],
-    ['non-array results', '{"results":{}}'],
-  ])('bulk add rejects HTTP errors containing %s', async (_description, body) => {
-    mockFetch(vi.fn(async () => new Response(body, { status: 500 })));
-
-    await expect(addDecisions({ values: ['1.2.3.4'] })).rejects.toThrow('Failed to add decisions');
-  });
-
-  test('bulk add surfaces write permission guidance', async () => {
-    mockFetch(vi.fn(async () => new Response(null, { status: 403 })));
-
-    await expect(addDecisions({ values: ['1.2.3.4'] })).rejects.toMatchObject({
-      message: 'Permission denied.',
-      helpText: 'Trusted IPs for Write Operations',
-    });
-  });
-
-  test('bulk add invalidates cached decisions so the next read includes new entries', async () => {
-    const decision = { id: 1, value: '1.2.3.4' };
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(Response.json([]))
-      .mockResolvedValueOnce(Response.json({ results: [], succeeded: 1, failed: 0, added: ['1.2.3.4'], allowlisted: [] }))
-      .mockResolvedValueOnce(Response.json([decision]));
-    mockFetch(fetchMock);
-
-    await expect(fetchDecisions()).resolves.toEqual([]);
-    await addDecisions({ values: ['1.2.3.4'] });
-    await expect(fetchDecisions()).resolves.toEqual([decision]);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   test('fetchDashboardStats handles empty filters and explicit request init', async () => {
@@ -393,32 +261,6 @@ describe('api helpers', () => {
     });
   });
 
-  test('allowlist helpers encode the value and scope, and addDecision reports allowlist refusals', async () => {
-    const allowlisted = [{ instance_id: 'eu-west', instance_name: 'EU West', reason: '10.0.0.0/8 from office' }];
-    const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0]) => String(input).includes('/api/decisions')
-      ? Response.json({ error: '10.1.2.3 is allowlisted', code: 'ALLOWLISTED', allowlisted }, { status: 409 })
-      : Response.json({ ok: true }));
-    mockFetch(fetchMock);
-
-    await expect(fetchAllowlists('eu west')).resolves.toEqual({ ok: true });
-    await expect(fetchAllowlists('all', '10.0')).resolves.toEqual({ ok: true });
-    await expect(fetchAllowlistEntries('office/vpn', 'all', 2)).resolves.toEqual({ ok: true });
-    await expect(fetchAllowlistEntries('office', 'east', 1, 100, 'vpn')).resolves.toEqual({ ok: true });
-    await expect(checkAllowlist('10.0.0.0/24', 'all')).resolves.toEqual({ ok: true });
-    await expect(addDecision({ ip: '10.1.2.3' })).rejects.toMatchObject({
-      message: '10.1.2.3 is allowlisted',
-      code: 'ALLOWLISTED',
-      allowlisted,
-    });
-    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(expect.arrayContaining([
-      '/api/allowlists?instance=eu+west',
-      '/api/allowlists?instance=all&q=10.0',
-      '/api/allowlists/office%2Fvpn/entries?instance=all&page=2&page_size=50',
-      '/api/allowlists/office/entries?instance=east&page=1&page_size=100&q=vpn',
-      '/api/allowlists/check?value=10.0.0.0%2F24&instance=all',
-    ]));
-  });
-
   test('delete and add helpers surface read-only 403 messages without permission metadata', async () => {
     mockFetch(vi.fn(async () => Response.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, { status: 403 })));
 
@@ -454,7 +296,7 @@ describe('api helpers', () => {
 
     await expect(deleteAlert(1)).resolves.toBeNull();
     await expect(deleteDecision(1)).resolves.toBeNull();
-    await expect(fetchAlerts()).rejects.toThrow('Failed to fetch alerts');
+    await expect(fetchAlertsPaginated(1)).rejects.toThrow('Failed to fetch alerts');
   });
 
   test('returns JSON payloads for successful mutations', async () => {

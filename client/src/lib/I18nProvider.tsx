@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -22,6 +23,7 @@ import {
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [preference, setPreferenceState] = useState<LanguagePreference>(getStoredLanguagePreference);
+  const hasSyncedStoredPreferenceRef = useRef(false);
   const { t: translate, i18n } = useTranslation();
   const browserLanguage = getBrowserLanguage();
   const language = resolveLanguagePreference(preference);
@@ -50,13 +52,27 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     };
   }, [i18n, language]);
 
-  const setLanguagePreference = useCallback((nextPreference: LanguagePreference, options?: { sync?: boolean }) => {
+  useEffect(() => {
+    if (hasSyncedStoredPreferenceRef.current) {
+      return;
+    }
+    hasSyncedStoredPreferenceRef.current = true;
+
+    if (typeof window === 'undefined' || localStorage.getItem(LANGUAGE_SETTING_KEY) == null) {
+      return;
+    }
+
+    void updateLanguagePreference(preference).catch((error) => {
+      console.error('Failed to update server language preference', error);
+    });
+  }, [preference]);
+
+  const setLanguagePreference = useCallback((nextPreference: LanguagePreference) => {
     const normalizedPreference = normalizeLanguagePreference(nextPreference);
     setPreferenceState(normalizedPreference);
     if (typeof window !== 'undefined') {
       localStorage.setItem(LANGUAGE_SETTING_KEY, normalizedPreference);
     }
-    if (options?.sync === false) return;
     void updateLanguagePreference(normalizedPreference).catch((error) => {
       console.error('Failed to update server language preference', error);
     });

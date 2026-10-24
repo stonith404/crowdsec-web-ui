@@ -1,20 +1,8 @@
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
-import type { AllowlistMatch, SyncStatus } from '../../../shared/contracts';
+import type { ConfigResponse, SyncStatus } from '../../../shared/contracts';
 
 export type {
   AddDecisionRequest,
-  AlertSession,
-  AlertSessionsResponse,
-  AllowlistCheckInstanceResult,
-  AllowlistCheckResponse,
-  AllowlistEntriesResponse,
-  AllowlistEntry,
-  AllowlistInstanceStatus,
-  AllowlistSummary,
-  AllowlistMatch,
-  AllowlistedDecisionResponse,
-  AllowlistsResponse,
-  AllowlistSourceStatus,
   AlertDecision,
   AlertDecisionSummary,
   AlertEvent,
@@ -27,7 +15,6 @@ export type {
   InstanceOperationResult,
   InstanceSummary,
   InstanceSyncStatus,
-  AllowlistSyncProgress,
   MultiInstanceOperationResponse,
   DashboardAttackLocationDatum,
   DashboardGranularity,
@@ -38,6 +25,7 @@ export type {
   DashboardStatsSeries,
   DashboardStatsTotals,
   DashboardWorldMapDatum,
+  CrowdsecMetricsActiveDecisions,
   CrowdsecMetricsApiEntity,
   CrowdsecMetricsAppsecEngine,
   CrowdsecMetricsLapiRoute,
@@ -50,8 +38,6 @@ export type {
   CrowdsecMetricsScenario,
   CrowdsecMetricsTiming,
   CrowdsecMetricsWhitelist,
-  BulkAddDecisionRequest,
-  BulkAddDecisionResponse,
   BulkDeleteRequest,
   BulkDeleteResult,
   CleanupByIpRequest,
@@ -65,7 +51,6 @@ export type {
   NotificationItem,
   NotificationListResponse,
   PaginatedResponse,
-  PaginationMeta,
   NotificationRule,
   NotificationRuleTestResult,
   NotificationRuleConfig,
@@ -88,8 +73,6 @@ export type {
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
   UpdateMetricsSidebarPreferenceRequest,
-  UpdateAllowlistsSidebarPreferenceRequest,
-  UpdateStatisticsSidebarPreferenceRequest,
   UpdateManualRefreshSettingRequest,
   UpdateManualDecisionScenariosRequest,
   ManualDecisionScenarioSettings,
@@ -152,6 +135,8 @@ export interface RefreshContextValue {
   refreshSignal: number;
   syncStatus: SyncStatus | null;
   refreshNow?: (mode: ManualRefreshMode) => Promise<void>;
+  config: ConfigResponse | null;
+  reloadConfig: () => Promise<void>;
 }
 
 export interface NotificationUnreadContextValue {
@@ -163,12 +148,6 @@ export interface NotificationUnreadContextValue {
 export interface ApiPermissionError extends Error {
   helpLink?: string;
   helpText?: string;
-}
-
-/** Thrown by `addDecision` when the target value is allowlisted and the request did not bypass it. */
-export interface AllowlistedDecisionError extends Error {
-  code: 'ALLOWLISTED';
-  allowlisted: AllowlistMatch[];
 }
 
 export interface WithChildren {

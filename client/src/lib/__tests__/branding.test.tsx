@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { BrandingProvider } from '../../contexts/BrandingContext';
 import { useBranding } from '../../contexts/useBranding';
-import { AppLogo } from '../../components/AppLogo';
+import { AppLogo } from '../../components/app-logo';
 import { applyDocumentBranding, applyThemeBranding, getInitialBranding, normalizeBranding } from '../branding';
 import { DEFAULT_BRANDING_THEME } from '../../../../shared/branding-theme';
 

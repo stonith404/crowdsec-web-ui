@@ -136,8 +136,7 @@ export type I18nContextValue = {
   language: SupportedLanguage;
   preference: LanguagePreference;
   browserLanguage: SupportedLanguage;
-  /** Saves the preference for the signed-in user too, unless `sync` is false. */
-  setLanguagePreference: (preference: LanguagePreference, options?: { sync?: boolean }) => void;
+  setLanguagePreference: (preference: LanguagePreference) => void;
   t: (key: string, values?: TranslationValues) => string;
 };
 

@@ -1,12 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { cn, getCountryCodesMatchingName, getCountryName, getHubUrl } from '../utils';
+import { getCountryCodesMatchingName, getCountryName, getHubUrl } from '../utils';
 
 describe('utils', () => {
-  test('cn merges class values', () => {
-    expect(cn('px-2', undefined, 'px-4', ['font-bold'])).toContain('px-4');
-    expect(cn('px-2', undefined, 'px-4', ['font-bold'])).toContain('font-bold');
-  });
-
   test('getHubUrl returns scenario and appsec links', () => {
     expect(getHubUrl('crowdsecurity/ssh-bf')).toBe('https://app.crowdsec.net/hub/author/crowdsecurity/scenarios/ssh-bf');
     expect(getHubUrl('crowdsecurity/appsec-rule')).toBe('https://app.crowdsec.net/hub/author/crowdsecurity/appsec-rules/appsec-rule');

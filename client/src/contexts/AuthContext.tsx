@@ -1,6 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { apiUrl } from '../lib/basePath';
-import { setOidcAutoLoginSuppressed } from '../lib/oidcAutoLogin';
 import { AUTH_SESSION_INVALIDATED_EVENT } from '../lib/sessionFetch';
 
 export type AuthRole = 'admin' | 'read-only';
@@ -18,15 +17,10 @@ export interface AuthStatus {
   user: AuthUser | null;
   authMethod: 'password' | 'passkey' | 'oidc' | null;
   oidcEnabled: boolean;
-  oidcAutoLogin: boolean;
   passwordLoginDisabled: boolean;
   passkeysEnabled: boolean;
   hasPassword: boolean;
   totpEnabled: boolean;
-  /** The password an administrator set must be replaced before anything else can be used. */
-  passwordChangeRequired?: boolean;
-  /** Display preferences the signed-in user saved; unset ones keep this browser's choice. */
-  preferences?: { language?: string; font?: string } | null;
 }
 
 interface AuthContextValue extends AuthStatus {
@@ -44,12 +38,10 @@ const DEFAULT_STATUS: AuthStatus = {
   user: null,
   authMethod: null,
   oidcEnabled: false,
-  oidcAutoLogin: false,
   passwordLoginDisabled: false,
   passkeysEnabled: false,
   hasPassword: false,
   totpEnabled: false,
-  passwordChangeRequired: false,
 };
 
 const fallbackAuthContext: AuthContextValue = {
@@ -98,10 +90,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener(AUTH_SESSION_INVALIDATED_EVENT, invalidateSession);
     return () => window.removeEventListener(AUTH_SESSION_INVALIDATED_EVENT, invalidateSession);
   }, []);
-
-  useEffect(() => {
-    if (status.authEnabled && status.authenticated) setOidcAutoLoginSuppressed(false);
-  }, [status.authEnabled, status.authenticated]);
 
   const refresh = useCallback(async () => {
     const nextStatus = await readJson<AuthStatus>('/api/auth/status', { cache: 'no-store' });
@@ -162,7 +150,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     const payload = await readJson<{ redirectUrl?: string }>('/api/auth/logout', { method: 'POST' });
-    setOidcAutoLoginSuppressed(true);
     // SSO sessions are also ended at the identity provider, which then
     // redirects back to the login page.
     if (payload?.redirectUrl && /^https?:\/\//i.test(payload.redirectUrl)) {

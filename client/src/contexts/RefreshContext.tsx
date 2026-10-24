@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchConfig } from '../lib/api';
 import { apiUrl } from '../lib/basePath';
 import { sessionFetch } from '../lib/sessionFetch';
-import type { ManualRefreshMode, RefreshContextValue, SyncStatus, WithChildren } from '../types';
+import type { ConfigResponse, ManualRefreshMode, RefreshContextValue, SyncStatus, WithChildren } from '../types';
 import { RefreshContext } from './refresh-context';
 
 export function RefreshProvider({ children }: WithChildren) {
@@ -11,6 +11,7 @@ export function RefreshProvider({ children }: WithChildren) {
     const [nextRefreshAt, setNextRefreshAt] = useState<Date | null>(null);
     const [refreshSignal, setRefreshSignal] = useState(0);
     const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+    const [config, setConfig] = useState<ConfigResponse | null>(null);
 
     // Track previous sync status to detect when sync completes
     const prevIsSyncing = useRef<boolean | null>(null);
@@ -21,6 +22,7 @@ export function RefreshProvider({ children }: WithChildren) {
         try {
             const config = await fetchConfig();
             if (config) {
+                setConfig(config);
                 if (config.refresh_interval !== undefined) {
                     setIntervalMsState(config.refresh_interval);
                 }
@@ -288,6 +290,8 @@ export function RefreshProvider({ children }: WithChildren) {
             refreshSignal,
             syncStatus,
             refreshNow,
+            config,
+            reloadConfig: updateConfig,
         }}>
             {children}
         </RefreshContext.Provider>

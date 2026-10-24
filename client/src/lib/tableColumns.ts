@@ -1,21 +1,8 @@
+import { useCallback, useState } from 'react';
 import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from '../../../shared/contracts';
 import type { TableColumnId, TableColumnPreferenceTable, TableColumnPreferences } from '../types';
 
 const TABLE_COLUMN_PREFERENCES_STORAGE_KEY = 'crowdsec-web-ui:table-column-preferences';
-
-// Keeps the row actions reachable when the columns are wider than the page. The backgrounds
-// are opaque versions of the row and header colors, so scrolled cells do not show through.
-// The row needs the `group` class for the hover color, and `aria-selected` for the selected color.
-const STICKY_ACTIONS_CLASS_NAME = 'lg:sticky lg:end-0 transition-colors group-hover:bg-gray-50 dark:group-hover:bg-[color-mix(in_srgb,var(--color-gray-700)_50%,var(--color-gray-800))] group-aria-selected:bg-primary-50 group-aria-selected:group-hover:bg-primary-100 dark:group-aria-selected:bg-[color-mix(in_srgb,var(--color-primary-900)_40%,var(--color-gray-800))] dark:group-aria-selected:group-hover:bg-[color-mix(in_srgb,var(--color-primary-900)_50%,var(--color-gray-800))]';
-export const STICKY_ACTIONS_HEADER_CLASS_NAME = 'lg:sticky lg:end-0 bg-gray-50 dark:bg-[color-mix(in_srgb,var(--color-gray-900)_50%,var(--color-gray-800))]';
-export const STICKY_ACTIONS_CELL_CLASS_NAME = `${STICKY_ACTIONS_CLASS_NAME} bg-white dark:bg-gray-800`;
-export const STICKY_ACTIONS_EXPIRED_CELL_CLASS_NAME = `${STICKY_ACTIONS_CLASS_NAME} bg-gray-50 dark:bg-[color-mix(in_srgb,var(--color-gray-900)_20%,var(--color-gray-800))]`;
-export const STICKY_ACTIONS_NESTED_CELL_CLASS_NAME = STICKY_ACTIONS_EXPIRED_CELL_CLASS_NAME;
-
-export type TableColumnWidths = Record<string, number>;
-
-export const MIN_TABLE_COLUMN_WIDTH = 72;
-export const MAX_TABLE_COLUMN_WIDTH = 960;
 
 export function loadStoredTableColumnPreferences(): TableColumnPreferences {
     if (typeof window === 'undefined') {
@@ -84,49 +71,6 @@ export function orderVisibleTableColumns(columnOrder: TableColumnId[], visibleCo
     return columnOrder.filter((columnId) => visibleColumnIds.has(columnId));
 }
 
-export function clampTableColumnWidth(width: number): number {
-    return Math.round(Math.min(MAX_TABLE_COLUMN_WIDTH, Math.max(MIN_TABLE_COLUMN_WIDTH, width)));
-}
-
-export function loadStoredTableColumnWidths(table: TableColumnPreferenceTable): TableColumnWidths {
-    if (typeof window === 'undefined') {
-        return {};
-    }
-
-    try {
-        const parsedValue = JSON.parse(window.localStorage.getItem(getColumnWidthsStorageKey(table)) ?? 'null') as unknown;
-        if (!parsedValue || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) {
-            return {};
-        }
-
-        const widths: TableColumnWidths = {};
-        for (const [columnId, width] of Object.entries(parsedValue)) {
-            if (typeof width === 'number' && Number.isFinite(width)) {
-                widths[columnId] = clampTableColumnWidth(width);
-            }
-        }
-        return widths;
-    } catch {
-        return {};
-    }
-}
-
-export function saveStoredTableColumnWidths(table: TableColumnPreferenceTable, widths: TableColumnWidths): void {
-    if (typeof window === 'undefined') {
-        return;
-    }
-
-    try {
-        if (Object.keys(widths).length === 0) {
-            window.localStorage.removeItem(getColumnWidthsStorageKey(table));
-        } else {
-            window.localStorage.setItem(getColumnWidthsStorageKey(table), JSON.stringify(widths));
-        }
-    } catch {
-        // Column widths are browser-local convenience state; ignore storage failures.
-    }
-}
-
 function cloneDefaultTableColumnPreferences(): TableColumnPreferences {
     return {
         alerts: [...DEFAULT_TABLE_COLUMN_PREFERENCES.alerts],
@@ -188,10 +132,6 @@ function getColumnOrderStorageKey(table: TableColumnPreferenceTable): string {
     return `crowdsec-web-ui:${table}:table-column-order`;
 }
 
-function getColumnWidthsStorageKey(table: TableColumnPreferenceTable): string {
-    return `crowdsec-web-ui:${table}:table-column-widths`;
-}
-
 function readStoredColumnOrders(table: TableColumnPreferenceTable): TableColumnId[] | null {
     if (typeof window === 'undefined') {
         return null;
@@ -248,4 +188,20 @@ function mergeColumnOrder(table: TableColumnPreferenceTable, visibleColumns: Tab
     }
 
     return [...orderedVisibleColumns, ...hiddenColumns];
+}
+
+/** The columns a table shows and their order, which the browser remembers */
+export function useTableColumns(table: TableColumnPreferenceTable) {
+    const [visible, setVisible] = useState(() => loadStoredTableColumnPreferences()[table]);
+    const [order, setOrder] = useState(() => loadStoredTableColumnOrders(table, visible));
+
+    const update = useCallback((nextOrder: TableColumnId[], nextVisible: TableColumnId[]) => {
+        const orderedVisible = orderVisibleTableColumns(nextOrder, nextVisible);
+        setOrder(nextOrder);
+        setVisible(orderedVisible);
+        saveStoredTableColumnOrders(table, nextOrder);
+        saveStoredTableColumnPreferences({ ...loadStoredTableColumnPreferences(), [table]: orderedVisible });
+    }, [table]);
+
+    return { order, visible, visibleOrdered: orderVisibleTableColumns(order, visible), update };
 }

@@ -1,14 +1,6 @@
 import type {
   AddDecisionRequest,
-  BulkAddDecisionRequest,
-  BulkAddDecisionResponse,
   AlertRecord,
-  AlertSessionsResponse,
-  AllowlistCheckResponse,
-  AllowlistEntriesResponse,
-  AllowlistedDecisionError,
-  AllowlistedDecisionResponse,
-  AllowlistsResponse,
   ApiPermissionError,
   BulkDeleteRequest,
   BulkDeleteResult,
@@ -30,11 +22,7 @@ import type {
   NotificationSettingsResponse,
   PaginatedResponse,
   SlimAlert,
-  StatsAlert,
-  StatsDecision,
   UpdateMetricsSidebarPreferenceRequest,
-  UpdateAllowlistsSidebarPreferenceRequest,
-  UpdateStatisticsSidebarPreferenceRequest,
   UpdateManualDecisionScenariosRequest,
   UpdateManualRefreshSettingRequest,
   UpsertNotificationChannelRequest,
@@ -105,10 +93,6 @@ async function fetchJson<T>(input: string, init?: RequestInit, defaultMsg?: stri
     return requestJson<T>(url, init, defaultMsg);
 }
 
-export async function fetchAlerts(): Promise<SlimAlert[]> {
-    return fetchJson<SlimAlert[]>('/api/alerts', undefined, 'Failed to fetch alerts');
-}
-
 export async function fetchAlertsPaginated(
     page: number,
     pageSize = 50,
@@ -125,21 +109,6 @@ export async function fetchAlertsPaginated(
     return fetchJson<PaginatedResponse<SlimAlert>>(`/api/alerts?${params.toString()}`, undefined, 'Failed to fetch alerts');
 }
 
-export async function fetchAlertSessionsPaginated(
-    page: number,
-    pageSize = 50,
-    filters?: Record<string, string>,
-): Promise<AlertSessionsResponse> {
-    const params = new URLSearchParams({
-        page: String(page),
-        page_size: String(pageSize),
-    });
-    for (const [key, value] of Object.entries(filters ?? {})) {
-        if (value) params.set(key, value);
-    }
-    return fetchJson<AlertSessionsResponse>(`/api/alerts/sessions?${params.toString()}`, undefined, 'Failed to fetch alert sessions');
-}
-
 export async function fetchAlert(id: string | number, instanceId?: string): Promise<AlertRecord> {
     const path = instanceId
         ? `/api/instances/${encodeURIComponent(instanceId)}/alerts/${encodeURIComponent(String(id))}`
@@ -153,10 +122,6 @@ export async function fetchAlert(id: string | number, instanceId?: string): Prom
         return alert;
     }
     return payload;
-}
-
-export async function fetchDecisions(): Promise<DecisionListItem[]> {
-    return fetchJson<DecisionListItem[]>('/api/decisions', undefined, 'Failed to fetch decisions');
 }
 
 export async function fetchDecisionsPaginated(
@@ -255,14 +220,6 @@ export async function bulkDeleteAlerts(refsOrIds: InstanceEntityRef[] | Array<st
   );
 }
 
-export async function fetchDecisionsForStats(): Promise<StatsDecision[]> {
-  return fetchJson<StatsDecision[]>('/api/stats/decisions', undefined, 'Failed to fetch decision statistics');
-}
-
-export async function fetchAlertsForStats(): Promise<StatsAlert[]> {
-    return fetchJson<StatsAlert[]>('/api/stats/alerts', undefined, 'Failed to fetch alert statistics');
-}
-
 export async function fetchDashboardStats(
   filters?: Record<string, string>,
   init?: RequestInit,
@@ -342,60 +299,11 @@ export async function addDecision(data: AddDecisionRequest): Promise<unknown> {
         body: JSON.stringify(data),
     });
     const payload = await res.clone().json().catch(() => null) as MultiInstanceOperationResponse | unknown;
-    if (res.status === 409 && (payload as Partial<AllowlistedDecisionResponse> | null)?.code === 'ALLOWLISTED') {
-        const { error, allowlisted } = payload as AllowlistedDecisionResponse;
-        throw Object.assign(new Error(error), { code: 'ALLOWLISTED', allowlisted }) as AllowlistedDecisionError;
-    }
     if (!res.ok && (!payload || typeof payload !== 'object' || !('results' in payload))) {
         await handleApiError(res, 'Failed to add decision', 'Write Operations');
     }
     clearGetCaches();
     return payload;
-}
-
-/** Adds one decision per value. Allowlisted values are skipped and returned unless `bypass_allowlist` is set. */
-export async function addDecisions(data: BulkAddDecisionRequest): Promise<BulkAddDecisionResponse> {
-    const res = await sessionFetch(apiUrl('/api/decisions/bulk-add'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-    });
-    const payload = await res.clone().json().catch(() => null) as BulkAddDecisionResponse | null;
-    if (!res.ok && (!payload || typeof payload !== 'object' || !Array.isArray(payload.results))) {
-        await handleApiError(res, 'Failed to add decisions', 'Write Operations');
-    }
-    clearGetCaches();
-    return payload as BulkAddDecisionResponse;
-}
-
-export async function fetchAllowlists(instanceScope: string, query = ''): Promise<AllowlistsResponse> {
-    const params = new URLSearchParams({ instance: instanceScope });
-    if (query) params.set('q', query);
-    return fetchJson<AllowlistsResponse>(`/api/allowlists?${params.toString()}`, undefined, 'Failed to fetch allowlists');
-}
-
-export async function fetchAllowlistEntries(
-    name: string,
-    instanceScope: string,
-    page: number,
-    pageSize = 50,
-    query = '',
-): Promise<AllowlistEntriesResponse> {
-    const params = new URLSearchParams({ instance: instanceScope, page: String(page), page_size: String(pageSize) });
-    if (query) params.set('q', query);
-    return fetchJson<AllowlistEntriesResponse>(
-        `/api/allowlists/${encodeURIComponent(name)}/entries?${params.toString()}`,
-        undefined,
-        'Failed to fetch allowlist entries',
-    );
-}
-
-export async function checkAllowlist(value: string, instanceScope: string): Promise<AllowlistCheckResponse> {
-    return fetchJson<AllowlistCheckResponse>(
-        `/api/allowlists/check?value=${encodeURIComponent(value)}&instance=${encodeURIComponent(instanceScope)}`,
-        undefined,
-        'Failed to check allowlists',
-    );
 }
 
 export async function fetchConfig(): Promise<ConfigResponse> {
@@ -415,28 +323,6 @@ export async function fetchCombinedCrowdsecMetrics(instanceScope: string): Promi
         undefined,
         'Failed to fetch combined CrowdSec metrics',
     );
-}
-
-export async function updateAllowlistsSidebarPreference(data: UpdateAllowlistsSidebarPreferenceRequest): Promise<{
-    success: boolean;
-    allowlists_sidebar_visible: boolean;
-}> {
-    return sendJson('/api/config/allowlists-sidebar', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-    }, 'Failed to update allowlists sidebar preference');
-}
-
-export async function updateStatisticsSidebarPreference(data: UpdateStatisticsSidebarPreferenceRequest): Promise<{
-    success: boolean;
-    statistics_sidebar_visible: boolean;
-}> {
-    return sendJson('/api/config/statistics-sidebar', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-    }, 'Failed to update statistics sidebar preference');
 }
 
 export async function updateMetricsSidebarPreference(data: UpdateMetricsSidebarPreferenceRequest): Promise<{
@@ -483,17 +369,6 @@ export async function updateLanguagePreference(language: string): Promise<{
     }, 'Failed to update language preference');
 }
 
-export async function updateFontPreference(font: string): Promise<{
-    success: boolean;
-    font: string;
-}> {
-    return sendJson('/api/config/font', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ font }),
-    }, 'Failed to update font preference');
-}
-
 async function sendJson<T>(input: string, init: RequestInit, defaultMsg: string): Promise<T> {
     const response = await sessionFetch(apiUrl(input), init);
     if (!response.ok) {
@@ -521,10 +396,6 @@ async function sendJson<T>(input: string, init: RequestInit, defaultMsg: string)
 
 export async function fetchNotificationSettings(): Promise<NotificationSettingsResponse> {
     return fetchJson<NotificationSettingsResponse>('/api/notifications/settings', undefined, 'Failed to fetch notification settings');
-}
-
-export async function fetchNotifications(limit = 100): Promise<NotificationListResponse> {
-    return fetchNotificationsPaginated(1, limit);
 }
 
 export async function fetchNotificationsPaginated(
