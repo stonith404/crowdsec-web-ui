@@ -22,8 +22,6 @@ import type {
   NotificationSettingsResponse,
   PaginatedResponse,
   SlimAlert,
-  StatsAlert,
-  StatsDecision,
   UpdateMetricsSidebarPreferenceRequest,
   UpdateManualDecisionScenariosRequest,
   UpdateManualRefreshSettingRequest,
@@ -95,10 +93,6 @@ async function fetchJson<T>(input: string, init?: RequestInit, defaultMsg?: stri
     return requestJson<T>(url, init, defaultMsg);
 }
 
-export async function fetchAlerts(): Promise<SlimAlert[]> {
-    return fetchJson<SlimAlert[]>('/api/alerts', undefined, 'Failed to fetch alerts');
-}
-
 export async function fetchAlertsPaginated(
     page: number,
     pageSize = 50,
@@ -128,10 +122,6 @@ export async function fetchAlert(id: string | number, instanceId?: string): Prom
         return alert;
     }
     return payload;
-}
-
-export async function fetchDecisions(): Promise<DecisionListItem[]> {
-    return fetchJson<DecisionListItem[]>('/api/decisions', undefined, 'Failed to fetch decisions');
 }
 
 export async function fetchDecisionsPaginated(
@@ -228,14 +218,6 @@ export async function bulkDeleteAlerts(refsOrIds: InstanceEntityRef[] | Array<st
     usesRefs ? { refs: refsOrIds as InstanceEntityRef[] } : { ids: refsOrIds as Array<string | number> },
     'Failed to delete selected alerts',
   );
-}
-
-export async function fetchDecisionsForStats(): Promise<StatsDecision[]> {
-  return fetchJson<StatsDecision[]>('/api/stats/decisions', undefined, 'Failed to fetch decision statistics');
-}
-
-export async function fetchAlertsForStats(): Promise<StatsAlert[]> {
-    return fetchJson<StatsAlert[]>('/api/stats/alerts', undefined, 'Failed to fetch alert statistics');
 }
 
 export async function fetchDashboardStats(
@@ -414,10 +396,6 @@ async function sendJson<T>(input: string, init: RequestInit, defaultMsg: string)
 
 export async function fetchNotificationSettings(): Promise<NotificationSettingsResponse> {
     return fetchJson<NotificationSettingsResponse>('/api/notifications/settings', undefined, 'Failed to fetch notification settings');
-}
-
-export async function fetchNotifications(limit = 100): Promise<NotificationListResponse> {
-    return fetchNotificationsPaginated(1, limit);
 }
 
 export async function fetchNotificationsPaginated(

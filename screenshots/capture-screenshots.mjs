@@ -125,9 +125,9 @@ async function createPage() {
   await cdp.send("Page.enable");
   await cdp.send("Runtime.enable");
   await cdp.send("Emulation.setDeviceMetricsOverride", {
-    width: 1843,
-    height: 1136,
-    deviceScaleFactor: 1,
+    width: 1440,
+    height: 900,
+    deviceScaleFactor: 2,
     mobile: false,
   });
   await cdp.send("Emulation.setEmulatedMedia", {
@@ -190,12 +190,7 @@ async function waitForAppSettled(cdp) {
     const settled = await evaluate(
       cdp,
       `(() => {
-        const text = document.body.innerText || "";
-        const loading = text.includes("Loading alerts...") ||
-          text.includes("Loading decisions...") ||
-          text.includes("Loading dashboard...") ||
-          text.includes("Loading notifications...") ||
-          text.includes("Loading...");
+        const loading = document.querySelector("[aria-busy='true'], svg[role='status']");
         const hasMain = !!document.querySelector("main");
         return hasMain && !loading;
       })()`,
@@ -215,9 +210,7 @@ async function prepareSession(cdp) {
     cdp,
     `(() => {
       localStorage.setItem("theme", "light");
-      localStorage.setItem("menuOpen", "true");
       localStorage.setItem("dashboard_granularity", "hour");
-      document.documentElement.classList.remove("dark");
       return true;
     })()`,
   );
@@ -284,31 +277,15 @@ async function clickFirst(cdp, selector) {
   await waitForAppSettled(cdp);
 }
 
-async function closeModal(cdp) {
-  await evaluate(
-    cdp,
-    `(() => {
-      const dialog = document.querySelector("[role='dialog']");
-      const backdrop = dialog?.parentElement;
-      if (!backdrop) throw new Error("Could not find open modal");
-      backdrop.click();
-      return true;
-    })()`,
-  );
+async function pressEscape(cdp) {
+  for (const type of ["keyDown", "keyUp"]) {
+    await cdp.send("Input.dispatchKeyEvent", { type, key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  }
   await sleep(500);
   await waitForAppSettled(cdp);
 }
 
 async function screenshot(cdp, name) {
-  await evaluate(
-    cdp,
-    `(() => {
-      document.documentElement.classList.remove("dark");
-      document.body.style.background = "#f8fafc";
-      window.scrollTo(0, 0);
-      return true;
-    })()`,
-  );
   await sleep(350);
   const { data } = await cdp.send("Page.captureScreenshot", {
     format: "png",
@@ -350,26 +327,22 @@ async function main() {
       await navigate(cdp, "/alerts?instance=primary");
       await screenshot(cdp, "alerts.png");
 
-      await navigate(cdp, "/alerts?instance=primary&q=country%3DNL");
       await clickFirst(cdp, "button[aria-label='Saved filters']");
       await waitForText(cdp, "German alerts");
       await screenshot(cdp, "saved_filters.png");
-      await closeModal(cdp);
-      await navigate(cdp, "/alerts?instance=primary");
+      await pressEscape(cdp);
 
-      await clickFirst(cdp, "button[aria-label='Filters']");
+      await clickByText(cdp, "Add filter");
       await clickByText(cdp, "Country");
       await waitForText(cdp, "Netherlands");
       await clickByText(cdp, "Netherlands");
-      await waitForText(cdp, "Showing 1 of 1 alerts");
       await screenshot(cdp, "quick_filters.png");
-      await clickFirst(cdp, "button[aria-label='Close filters']");
+      await pressEscape(cdp);
 
       await clickFirst(cdp, "tbody tr");
       await screenshot(cdp, "alert_details.png");
+      await pressEscape(cdp);
 
-      await closeModal(cdp);
-      await clickFirst(cdp, "button[aria-label='Expand search']");
       await clickFirst(cdp, "button[aria-label='Search syntax help']");
       await screenshot(cdp, "search_syntax.png");
 
@@ -385,6 +358,7 @@ async function main() {
       await navigate(cdp, "/notifications");
       await screenshot(cdp, "notifications.png");
 
+      await navigate(cdp, "/notifications/rules");
       await clickByText(cdp, "Add Rule");
       await screenshot(cdp, "notification_rule.png");
 

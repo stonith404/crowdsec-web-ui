@@ -29,7 +29,7 @@ export CROWDSEC_BOOTSTRAP_RETRY_ENABLED="${CROWDSEC_BOOTSTRAP_RETRY_ENABLED:-fal
 export VITE_VERSION="${VITE_VERSION:-2026.06.05}"
 export VITE_BRANCH="${VITE_BRANCH:-main}"
 export VITE_COMMIT_HASH="${VITE_COMMIT_HASH:-screenshot}"
-export VITE_REPO_URL="${VITE_REPO_URL:-https://github.com/TheDuffman85/crowdsec-web-ui}"
+export VITE_REPO_URL="${VITE_REPO_URL:-https://github.com/stonith404/crowdsec-web-ui}"
 export VITE_BUILD_DATE="${VITE_BUILD_DATE:-2026-06-05}"
 export BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:${CROWDSEC_SCREENSHOT_BACKEND_PORT}}"
 

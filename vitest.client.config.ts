@@ -7,6 +7,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
+      '@': path.resolve(import.meta.dirname, 'client/src'),
       '@shared': path.resolve(import.meta.dirname, 'shared'),
     },
   },
@@ -22,13 +23,9 @@ export default defineConfig({
       include: [
         'client/src/lib/basePath.ts',
         'client/src/lib/utils.ts',
-        'client/src/lib/stats.ts',
-        'client/src/lib/api.ts',
+        'client/src/lib/deleteResults.ts',
+        'client/src/lib/navigation.ts',
         'client/src/contexts/RefreshContext.tsx',
-        'client/src/components/ui/Badge.tsx',
-        'client/src/components/ui/Card.tsx',
-        'client/src/components/TimeDisplay.tsx',
-        'client/src/components/SyncOverlay.tsx',
       ],
       exclude: ['client/src/test/**', 'client/src/main.tsx', 'client/src/types/**', 'client/src/vite-env.d.ts'],
       thresholds: {

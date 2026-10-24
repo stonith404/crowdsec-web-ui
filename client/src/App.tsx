@@ -1,154 +1,119 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { Layout } from "./components/Layout";
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { BrandingProvider } from './contexts/BrandingContext';
-import { NotificationUnreadProvider } from "./contexts/NotificationUnreadContext";
-import { RefreshProvider } from "./contexts/RefreshContext";
-import { ToastProvider } from "./contexts/ToastContext";
-import { useRefresh } from "./contexts/useRefresh";
-import { SyncOverlay } from "./components/SyncOverlay";
-import { getBasePath } from "./lib/basePath";
-import { useI18n } from "./lib/i18n";
+import { KumoLocaleProvider, LinkProvider, Loader, Toasty, TooltipProvider } from '@cloudflare/kumo';
+import { AppLink } from '@/components/app-link';
+import { AppLayout } from '@/components/layout/app-layout';
+import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { BrandingProvider } from '@/contexts/BrandingContext';
+import { NotificationUnreadProvider } from '@/contexts/NotificationUnreadContext';
+import { RefreshProvider } from '@/contexts/RefreshContext';
+import { getBasePath } from '@/lib/basePath';
+import { useLanguageFont } from '@/lib/font';
+import { useI18n } from '@/lib/i18n';
+import { ThemeContext, useTheme } from '@/lib/theme';
+import { toastManager } from '@/lib/toast';
 
-const Dashboard = lazy(async () => ({ default: (await import('./pages/Dashboard')).Dashboard }));
-const Alerts = lazy(async () => ({ default: (await import('./pages/Alerts')).Alerts }));
-const Decisions = lazy(async () => ({ default: (await import('./pages/Decisions')).Decisions }));
-const Metrics = lazy(async () => ({ default: (await import('./pages/Metrics')).Metrics }));
-const Notifications = lazy(async () => ({ default: (await import('./pages/Notifications')).Notifications }));
-const Settings = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
-const Login = lazy(async () => ({ default: (await import('./pages/Login')).Login }));
-const Setup = lazy(async () => ({ default: (await import('./pages/Setup')).Setup }));
+const Dashboard = lazy(async () => ({ default: (await import('@/pages/dashboard')).Dashboard }));
+const Alerts = lazy(async () => ({ default: (await import('@/pages/alerts')).Alerts }));
+const Decisions = lazy(async () => ({ default: (await import('@/pages/decisions')).Decisions }));
+const IpProfile = lazy(async () => ({ default: (await import('@/pages/ip')).IpProfile }));
+const Metrics = lazy(async () => ({ default: (await import('@/pages/metrics')).Metrics }));
+const NotificationsLayout = lazy(async () => ({ default: (await import('@/pages/notifications/layout')).NotificationsLayout }));
+const NotificationInbox = lazy(async () => ({ default: (await import('@/pages/notifications/inbox')).NotificationInbox }));
+const NotificationDestinations = lazy(async () => ({ default: (await import('@/pages/notifications/destinations')).NotificationDestinations }));
+const NotificationRules = lazy(async () => ({ default: (await import('@/pages/notifications/rules')).NotificationRules }));
+const SettingsLayout = lazy(async () => ({ default: (await import('@/pages/settings/layout')).SettingsLayout }));
+const GeneralSettings = lazy(async () => ({ default: (await import('@/pages/settings/general')).GeneralSettings }));
+const AuthenticationSettings = lazy(async () => ({ default: (await import('@/pages/settings/authentication')).AuthenticationSettings }));
+const BrandingSettings = lazy(async () => ({ default: (await import('@/pages/settings/branding')).BrandingSettings }));
+const Login = lazy(async () => ({ default: (await import('@/pages/login')).Login }));
+const Setup = lazy(async () => ({ default: (await import('@/pages/setup')).Setup }));
 
-function RouteFallback() {
-  const { t } = useI18n();
-
-  return <div className="text-center p-8 text-gray-500">{t('app.loading')}</div>;
-}
-
-function ProtectedProviders({ children }: { children: ReactNode }) {
+function Loading() {
   return (
-    <ToastProvider>
-      <RefreshProvider>
-        <NotificationUnreadProvider>
-          {children}
-        </NotificationUnreadProvider>
-      </RefreshProvider>
-    </ToastProvider>
+    <div className="flex flex-1 items-center justify-center p-8 text-kumo-subtle">
+      <Loader size={20} />
+    </div>
   );
 }
 
-function ProtectedAppShell() {
-  const { syncStatus } = useRefresh();
-
-  return (
-    <>
-      <SyncOverlay syncStatus={syncStatus} />
-      <Routes>
-        <Route path="/" element={<Layout />}>
-          <Route
-            index
-            element={(
-              <Suspense fallback={<RouteFallback />}>
-                <Dashboard />
-              </Suspense>
-            )}
-          />
-          <Route
-            path="alerts"
-            element={(
-              <Suspense fallback={<RouteFallback />}>
-                <Alerts />
-              </Suspense>
-            )}
-          />
-          <Route
-            path="decisions"
-            element={(
-              <Suspense fallback={<RouteFallback />}>
-                <Decisions />
-              </Suspense>
-            )}
-          />
-          <Route
-            path="metrics"
-            element={(
-              <Suspense fallback={<RouteFallback />}>
-                <Metrics />
-              </Suspense>
-            )}
-          />
-          <Route
-            path="notifications"
-            element={(
-              <Suspense fallback={<RouteFallback />}>
-                <Notifications />
-              </Suspense>
-            )}
-          />
-          <Route
-            path="settings"
-            element={(
-              <Suspense fallback={<RouteFallback />}>
-                <Settings />
-              </Suspense>
-            )}
-          />
-        </Route>
-        <Route path="/setup" element={<Navigate to="/" replace />} />
-        <Route path="/login" element={<Navigate to="/" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </>
-  );
+function Page({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<Loading />}>{children}</Suspense>;
 }
 
-function AuthenticatedRoutes() {
+function AppRoutes() {
   const { authEnabled, authenticated, loading, setupRequired } = useAuth();
 
-  if (loading) {
-    return <RouteFallback />;
-  }
+  if (loading) return <Loading />;
 
   if (authEnabled && setupRequired) {
     return (
-      <Suspense fallback={<RouteFallback />}>
-        <Routes>
-          <Route path="/setup" element={<Setup />} />
-          <Route path="*" element={<Navigate to="/setup" replace />} />
-        </Routes>
-      </Suspense>
+      <Routes>
+        <Route path="/setup" element={<Page><Setup /></Page>} />
+        <Route path="*" element={<Navigate to="/setup" replace />} />
+      </Routes>
     );
   }
 
   if (authEnabled && !authenticated) {
     return (
-      <Suspense fallback={<RouteFallback />}>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </Suspense>
+      <Routes>
+        <Route path="/login" element={<Page><Login /></Page>} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
     );
   }
 
   return (
-    <ProtectedProviders>
-      <ProtectedAppShell />
-    </ProtectedProviders>
+    <RefreshProvider>
+      <NotificationUnreadProvider>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route index element={<Page><Dashboard /></Page>} />
+            <Route path="alerts" element={<Page><Alerts /></Page>} />
+            <Route path="decisions" element={<Page><Decisions /></Page>} />
+            <Route path="ip/:ip" element={<Page><IpProfile /></Page>} />
+            <Route path="metrics" element={<Page><Metrics /></Page>} />
+            <Route path="notifications" element={<Page><NotificationsLayout /></Page>}>
+              <Route index element={<Page><NotificationInbox /></Page>} />
+              <Route path="destinations" element={<Page><NotificationDestinations /></Page>} />
+              <Route path="rules" element={<Page><NotificationRules /></Page>} />
+            </Route>
+            <Route path="settings" element={<Page><SettingsLayout /></Page>}>
+              <Route index element={<Page><GeneralSettings /></Page>} />
+              <Route path="authentication" element={<Page><AuthenticationSettings /></Page>} />
+              <Route path="branding" element={<Page><BrandingSettings /></Page>} />
+            </Route>
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </NotificationUnreadProvider>
+    </RefreshProvider>
   );
 }
 
-function App() {
+export default function App() {
+  const theme = useTheme();
+  const { t } = useI18n();
+  useLanguageFont();
+
   return (
-    <BrandingProvider>
-      <AuthProvider>
-        <BrowserRouter basename={getBasePath() || '/'}>
-          <AuthenticatedRoutes />
-        </BrowserRouter>
-      </AuthProvider>
-    </BrandingProvider>
+    <ThemeContext.Provider value={theme}>
+      <KumoLocaleProvider translations={{ label: { optional: t('common.optional') }, layerDialog: { close: t('common.close'), cancel: t('common.cancel') } }}>
+        <BrandingProvider>
+          <AuthProvider>
+            <TooltipProvider>
+              <Toasty toastManager={toastManager}>
+                <BrowserRouter basename={getBasePath() || '/'}>
+                  <LinkProvider component={AppLink}>
+                    <AppRoutes />
+                  </LinkProvider>
+                </BrowserRouter>
+              </Toasty>
+            </TooltipProvider>
+          </AuthProvider>
+        </BrandingProvider>
+      </KumoLocaleProvider>
+    </ThemeContext.Provider>
   );
 }
-
-export default App;
