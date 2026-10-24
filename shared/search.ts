@@ -2091,6 +2091,15 @@ function compareDateValue(
   }
 }
 
+const RELATIVE_DATE_UNIT_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+
+/** Resolves `now` or `now-<n><m|h|d|w>` to a timestamp, so a saved query like `date>=now-24h` keeps covering the last day */
+export function parseRelativeSearchDate(value: string, now = Date.now()): number | null {
+  const match = /^now(?:-(\d+)([mhdw]))?$/i.exec(value.trim());
+  if (!match) return null;
+  return match[1] ? now - Number(match[1]) * RELATIVE_DATE_UNIT_MS[match[2].toLowerCase()] : now;
+}
+
 function parseSearchDateValue(
   value: string,
   dateOptions: SearchDateOptions = {},
@@ -2128,7 +2137,7 @@ function parseSearchDateValue(
     };
   }
 
-  const timestamp = Date.parse(trimmedValue);
+  const timestamp = parseRelativeSearchDate(trimmedValue) ?? Date.parse(trimmedValue);
   if (Number.isNaN(timestamp)) {
     return null;
   }
