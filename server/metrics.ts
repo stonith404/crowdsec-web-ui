@@ -1,4 +1,5 @@
 import type {
+  CrowdsecMetricsActiveDecisions,
   CrowdsecMetricsAppsecEngine,
   CrowdsecMetricsApiEntity,
   CrowdsecMetricsBouncerMode,
@@ -674,6 +675,22 @@ function aggregateWhitelists(samples: PrometheusSample[]): CrowdsecMetricsWhitel
     }));
 }
 
+// Not capped like the other tables, because the client adds the rows up into totals per origin
+function aggregateActiveDecisions(samples: PrometheusSample[]): CrowdsecMetricsActiveDecisions[] {
+  const groups = new Map<string, CrowdsecMetricsActiveDecisions>();
+  for (const sample of samples) {
+    const origin = sample.labels.origin || 'unknown';
+    const reason = sample.labels.reason || 'unknown';
+    const key = `${origin}\u0000${reason}`;
+    const group = groups.get(key) ?? { origin, reason, count: 0 };
+    group.count += sample.value;
+    groups.set(key, group);
+  }
+  return Array.from(groups.values())
+    .filter((group) => group.count > 0)
+    .sort((left, right) => right.count - left.count);
+}
+
 export function summarizeCrowdsecMetrics(samples: PrometheusSample[]): CrowdsecMetricsResponse {
   const parserOk = metric(samples, 'cs_parser_hits_ok_total').reduce((sum, sample) => sum + sample.value, 0);
   const parserKo = metric(samples, 'cs_parser_hits_ko_total').reduce((sum, sample) => sum + sample.value, 0);
@@ -741,6 +758,7 @@ export function summarizeCrowdsecMetrics(samples: PrometheusSample[]): CrowdsecM
     parserSources: aggregateParserSources(samples),
     parserNodes: aggregateParserNodes(samples),
     whitelists,
+    activeDecisionsByOrigin: aggregateActiveDecisions(activeDecisionSamples),
     scenarios,
     parserTimings: aggregateParserTimings(samples),
     lapiRoutes: aggregateLapiRoutes(samples),

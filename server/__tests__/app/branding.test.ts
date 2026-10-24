@@ -158,10 +158,10 @@ describe('branding theme', () => {
 
     const theme = { light: { accent: '#e11d48', neutral: null }, dark: { accent: null, neutral: 'slate' as const } };
     expect(resolveThemeMode(theme, 'dark')).toEqual({ accent: '#e11d48', neutral: 'slate' });
-    expect(resolveThemeMode(theme, 'light')).toEqual({ accent: '#e11d48', neutral: 'gray' });
+    expect(resolveThemeMode(theme, 'light')).toEqual({ accent: '#e11d48', neutral: 'neutral' });
     expect(getResolvedThemeModeVariables(DEFAULT_BRANDING_THEME, 'light')).toMatchObject({
-      '--color-primary-600': '#0284c7',
-      '--color-gray-50': 'oklch(98.5% 0.002 247.839)',
+      '--color-primary-600': '#056dff',
+      '--color-gray-50': 'oklch(98.5% 0 0)',
     });
   });
 

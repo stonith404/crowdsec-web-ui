@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import type { SearchNode } from '../../shared/search';
+import { parseRelativeSearchDate, type SearchNode } from '../../shared/search';
 import type { AlertListFilters, DecisionListFilters } from './types';
 import {
   addDashboardBucketInterval,
@@ -779,7 +779,7 @@ export function parseSqlSearchDateValue(
     return { start: start.getTime(), end: end.getTime(), precision: 'hour' };
   }
 
-  const timestamp = Date.parse(trimmed);
+  const timestamp = parseRelativeSearchDate(trimmed) ?? Date.parse(trimmed);
   if (!Number.isFinite(timestamp)) return null;
   return { start: timestamp, end: timestamp, precision: 'instant' };
 }

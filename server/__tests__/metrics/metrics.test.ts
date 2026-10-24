@@ -118,6 +118,20 @@ cs_parsing_time_seconds_sum{source="/var/log/auth.log",type="syslog"} 0.25
     });
   });
 
+  test('adds up active decisions per origin and reason across sources', () => {
+    const summary = summarizeCrowdsecMetrics(parsePrometheusText(`
+cs_active_decisions{reason="crowdsecurity/ssh-bf",origin="CAPI",action="ban"} 30
+cs_active_decisions{reason="crowdsecurity/ssh-bf",origin="CAPI",action="captcha"} 5
+cs_active_decisions{reason="tor-exit-nodes",origin="lists",action="ban"} 40
+cs_active_decisions{reason="crowdsecurity/ssh-bf",origin="crowdsec",action="ban"} 0
+`));
+
+    expect(summary.activeDecisionsByOrigin).toEqual([
+      { origin: 'lists', reason: 'tor-exit-nodes', count: 40 },
+      { origin: 'CAPI', reason: 'crowdsecurity/ssh-bf', count: 35 },
+    ]);
+  });
+
   test('separates log processor activity, identifies bouncer mode, and includes scenarios', () => {
     const summary = summarizeCrowdsecMetrics(parsePrometheusText(`
 cs_info{version="v1.7.8"} 1
